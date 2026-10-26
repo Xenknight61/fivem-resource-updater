@@ -1599,8 +1599,11 @@ mod source_error_normalization_tests {
 
     #[test]
     fn public_planning_api_does_not_expose_test_hooks() {
-        let module_source = include_str!("mod.rs");
-        let lib_source = include_str!("../lib.rs");
+        // Normalised, because the checkout's line endings are not what this test is about. On a
+        // CRLF checkout the positive assertion below fails, and worse, every negative one passes
+        // for free: a forbidden pattern written with a newline can never match.
+        let module_source = include_str!("mod.rs").replace("\r\n", "\n");
+        let lib_source = include_str!("../lib.rs").replace("\r\n", "\n");
 
         for forbidden in [
             ["pub ", "test_hooks"].concat(),

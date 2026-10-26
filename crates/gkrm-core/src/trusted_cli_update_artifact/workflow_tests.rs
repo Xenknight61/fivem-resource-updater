@@ -1504,7 +1504,12 @@ fn path_snapshot_rejects_file_symlink_where_supported() {
     }
 
     let err = PathSnapshot::try_capture(&link).expect_err("file symlink rejected");
-    assert!(matches!(err, PathSnapshotError::Symlink));
+    // Windows makes a symlink out of a reparse point, and the snapshot classifies it as the
+    // reparse point it is. Either way it is refused, which is what this is about.
+    assert!(matches!(
+        err,
+        PathSnapshotError::Symlink | PathSnapshotError::ReparsePoint
+    ));
 }
 
 #[test]
@@ -1519,7 +1524,10 @@ fn path_snapshot_rejects_directory_symlink_where_supported() {
     }
 
     let err = PathSnapshot::try_capture(&link).expect_err("directory symlink rejected");
-    assert!(matches!(err, PathSnapshotError::Symlink));
+    assert!(matches!(
+        err,
+        PathSnapshotError::Symlink | PathSnapshotError::ReparsePoint
+    ));
 }
 
 #[cfg(windows)]
