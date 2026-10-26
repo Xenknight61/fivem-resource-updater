@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-update-two-way-get-diff"
+description = "Enables the update_two_way_get_diff command without any pre-configured scope."
+commands.allow = ["update_two_way_get_diff"]
+
+[[permission]]
+identifier = "deny-update-two-way-get-diff"
+description = "Denies the update_two_way_get_diff command without any pre-configured scope."
+commands.deny = ["update_two_way_get_diff"]

@@ -1,0 +1,32 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Main window capability for the reviewed desktop surface through Task 32E.2A.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-app-get-info",
+    "allow-select-installed-root",
+    "allow-select-package-file",
+    "allow-session-list-selections",
+    "allow-session-release-selection",
+    "allow-scan-installed-root",
+    "allow-scan-get-summary",
+    "allow-scan-list-resources",
+    "allow-scan-get-resource-detail",
+    "allow-scan-release",
+    "allow-update-recovery-overview",
+    "allow-update-recovery-retire-terminal",
+    "allow-update-recovery-status",
+    "allow-update-recovery-list-candidates",
+    "allow-update-recovery-execute",
+    "allow-update-recovery-release",
+    "allow-update-two-way-preview",
+    "allow-update-two-way-get-diff",
+    "allow-update-two-way-apply",
+    "allow-update-two-way-release",
+    "allow-update-history-list",
+    "allow-update-history-undo",
+    "allow-storage-report",
+    "allow-storage-release"
+  ]
+}

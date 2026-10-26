@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-storage-release"
+description = "Enables the storage_release command without any pre-configured scope."
+commands.allow = ["storage_release"]
+
+[[permission]]
+identifier = "deny-storage-release"
+description = "Denies the storage_release command without any pre-configured scope."
+commands.deny = ["storage_release"]

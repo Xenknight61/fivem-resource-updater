@@ -1,0 +1,44 @@
+{
+  "name": "gkrm-desktop",
+  "private": true,
+  "license": "MIT",
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0 <23",
+    "npm": ">=10 <12"
+  },
+  "scripts": {
+    "dev": "npm run check:runtime && vite",
+    "dev:harness": "npm run check:runtime && vite --open /dev/harness.html",
+    "check:runtime": "node scripts/check-runtime.mjs",
+    "typecheck": "npm run check:runtime && vue-tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
+    "test:unit": "npm run check:runtime && vitest run",
+    "build": "npm run check:runtime && npm run clean:dist && vue-tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && vite build && npm run audit:dist-network",
+    "clean:dist": "node scripts/clean-dist.mjs",
+    "audit:dist-network": "node scripts/audit-dist-network.mjs",
+    "audit:production": "npm audit --omit=dev",
+    "audit:full": "npm audit",
+    "verify:no-bundle-output": "node scripts/verify-no-bundle-output.mjs",
+    "tauri:build:no-bundle": "npm run check:runtime && tauri build --no-bundle && npm run verify:no-bundle-output",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1",
+    "lucide-vue-next": "1.0.0",
+    "pinia": "4.0.2",
+    "vue": "3.5.44",
+    "vue-router": "5.2.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
+    "@types/node": "24.10.1",
+    "@vitejs/plugin-vue": "6.0.8",
+    "@vue/test-utils": "2.2.7",
+    "jsdom": "29.1.1",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vitest": "4.1.12",
+    "vue-tsc": "3.3.8"
+  }
+}

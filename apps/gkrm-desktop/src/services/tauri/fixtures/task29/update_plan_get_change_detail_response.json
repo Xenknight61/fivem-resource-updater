@@ -1,0 +1,63 @@
+{
+  "change": {
+    "changeHandle": "123e4567-e89b-42d3-a456-426614174031",
+    "displayPath": "client/detail.lua",
+    "disposition": "policyConflictReview",
+    "reviewRequirement": "decisionRequired",
+    "reviewedAction": "manualReview",
+    "localDelta": "modified",
+    "incomingDelta": "deleted",
+    "policyTransition": "changed",
+    "blocksAutomaticApply": true,
+    "baselineState": "absent",
+    "installedState": "present",
+    "incomingState": "present",
+    "recommendedAction": "preserveInstalledState",
+    "allowedDecisions": [
+      {
+        "choice": "acceptRecommended",
+        "requiresPolicyAcknowledgement": false
+      },
+      {
+        "choice": "useIncomingState",
+        "requiresPolicyAcknowledgement": true
+      },
+      {
+        "choice": "preserveInstalledState",
+        "requiresPolicyAcknowledgement": true
+      },
+      {
+        "choice": "manualReview",
+        "requiresPolicyAcknowledgement": false
+      }
+    ],
+    "findings": [
+      {
+        "code": "decisionRequired",
+        "severity": "warning",
+        "message": "A decision is required before this change can be applied."
+      },
+      {
+        "code": "manualReviewRequired",
+        "severity": "warning",
+        "message": "Manual review is required before this change can be applied."
+      },
+      {
+        "code": "mergeAnalysisQueued",
+        "severity": "info",
+        "message": "Merge analysis is required before this change can be applied."
+      },
+      {
+        "code": "conflictReviewRequired",
+        "severity": "warning",
+        "message": "A conflict requires review before this change can be applied."
+      },
+      {
+        "code": "policyReviewRequired",
+        "severity": "warning",
+        "message": "A policy transition requires review before this change can be applied."
+      }
+    ],
+    "omittedFindingCount": 2
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "summary": {
+    "planHandle": "123e4567-e89b-42d3-a456-426614174030",
+    "status": "manualMergeRequired",
+    "installedResourceLabel": "installed-resource",
+    "incomingResourceLabel": "package-resource",
+    "totalChangeCount": 100000,
+    "noChangeCount": 0,
+    "incomingActionCount": 1,
+    "preservedLocalCount": 2,
+    "convergedCount": 3,
+    "mergeCandidateCount": 4,
+    "conflictCount": 5,
+    "policyReviewCount": 6,
+    "decisionsRequiredCount": 7,
+    "pendingDecisionCount": 8,
+    "manualReviewCount": 9
+  }
+}

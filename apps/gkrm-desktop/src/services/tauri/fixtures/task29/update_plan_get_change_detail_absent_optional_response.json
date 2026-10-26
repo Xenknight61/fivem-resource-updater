@@ -1,0 +1,36 @@
+{
+  "change": {
+    "changeHandle": "123e4567-e89b-42d3-a456-426614174031",
+    "displayPath": "client/detail.lua",
+    "disposition": "policyConflictReview",
+    "reviewRequirement": "decisionRequired",
+    "reviewedAction": "manualReview",
+    "localDelta": "modified",
+    "incomingDelta": "deleted",
+    "policyTransition": "changed",
+    "blocksAutomaticApply": true,
+    "baselineState": "absent",
+    "installedState": "present",
+    "incomingState": "present",
+    "allowedDecisions": [
+      {
+        "choice": "acceptRecommended",
+        "requiresPolicyAcknowledgement": false
+      },
+      {
+        "choice": "useIncomingState",
+        "requiresPolicyAcknowledgement": true
+      },
+      {
+        "choice": "preserveInstalledState",
+        "requiresPolicyAcknowledgement": true
+      },
+      {
+        "choice": "manualReview",
+        "requiresPolicyAcknowledgement": false
+      }
+    ],
+    "findings": [],
+    "omittedFindingCount": 0
+  }
+}

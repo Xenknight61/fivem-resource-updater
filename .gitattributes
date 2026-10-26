@@ -1,0 +1,5 @@
+# Fixture data must stay byte-identical on every platform. The installed tree is compared
+# against ZIP entry contents, so an end-of-line conversion on checkout would make every
+# fixture file look changed and would silently invalidate the update demo.
+fixtures/** text eol=lf
+fixtures/packages/*.zip binary

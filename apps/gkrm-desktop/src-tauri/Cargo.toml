@@ -1,0 +1,31 @@
+[package]
+name = "gkrm-desktop"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+name = "gkrm_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "gkrm-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+gkrm-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tauri.workspace = true
+tauri-plugin-dialog.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+gkrm-core = { workspace = true, features = ["desktop-test-support"] }
+tempfile.workspace = true
+zip.workspace = true

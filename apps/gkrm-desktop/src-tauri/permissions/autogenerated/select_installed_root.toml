@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-select-installed-root"
+description = "Enables the select_installed_root command without any pre-configured scope."
+commands.allow = ["select_installed_root"]
+
+[[permission]]
+identifier = "deny-select-installed-root"
+description = "Denies the select_installed_root command without any pre-configured scope."
+commands.deny = ["select_installed_root"]

@@ -1,0 +1,2 @@
+-- Customize this file. Official updates never overwrite it.
+-- CustomHook = function() end

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-update-two-way-release"
+description = "Enables the update_two_way_release command without any pre-configured scope."
+commands.allow = ["update_two_way_release"]
+
+[[permission]]
+identifier = "deny-update-two-way-release"
+description = "Denies the update_two_way_release command without any pre-configured scope."
+commands.deny = ["update_two_way_release"]

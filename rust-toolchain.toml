@@ -1,0 +1,5 @@
+[toolchain]
+# Pinned so the release gates reproduce the toolchain named in docs/release-checklist.md.
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

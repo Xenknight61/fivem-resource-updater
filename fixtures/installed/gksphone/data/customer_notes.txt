@@ -1,0 +1,2 @@
+Customer-owned file that no official package contains.
+An update must never delete it.

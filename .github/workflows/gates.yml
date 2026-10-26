@@ -1,0 +1,131 @@
+name: Gates
+
+# Runs the Rust, desktop, and frontend gates from docs/release-checklist.md. This workflow
+# verifies only: it never packages, bundles, signs, tags, or publishes anything, and
+# verify:no-bundle-output asserts that no installer or updater artifact was produced.
+#
+# No environment overrides are set on purpose. The gates must pass against the runner's real
+# temporary directory, because a run that needs TMP/TEMP redirected is not a passing gate.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  rust:
+    name: Rust gates
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the version; this installs it with rustfmt and clippy.
+      - name: Install the pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Workspace tests
+        run: cargo test --workspace
+
+      - name: Core serial unit tests
+        run: cargo test -p gkrm-core --lib -- --test-threads=1
+
+      - name: Desktop serial tests
+        run: cargo test -p gkrm-desktop -- --test-threads=1
+
+      - name: Release build
+        run: cargo build --release --workspace
+
+      - name: Read-only CLI lifecycle on synthetic fixtures
+        run: |
+          ./target/release/gkrm.exe inspect \
+            --installed ./fixtures/installed \
+            --package ./fixtures/packages/gksphone-update.zip \
+            --output json > inspect.json
+          ./target/release/gkrm.exe plan \
+            --installed ./fixtures/installed \
+            --package ./fixtures/packages/gksphone-update.zip \
+            --output json > plan.json
+          node .github/scripts/check-cli-plan.mjs plan.json
+
+      - name: Fixtures are unchanged by the read-only surfaces
+        run: git diff --exit-code -- fixtures
+
+      - name: No bundle, installer, or updater output
+        run: |
+          if [ -e target/release/bundle ]; then
+            echo "target/release/bundle must not exist"
+            exit 1
+          fi
+
+  frontend:
+    name: Desktop and frontend gates
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/gkrm-desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: apps/gkrm-desktop/package-lock.json
+
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-tauri-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-tauri-${{ runner.os }}-
+
+      - run: npm ci
+      - run: npm run check:runtime
+      - run: npm run typecheck
+      - run: npm run test:unit
+      - run: npm run build
+      - run: npm run audit:production
+      - run: npm run audit:full
+
+      - name: Only the patched nanoid is installed
+        run: node ../../.github/scripts/check-nanoid.mjs
+
+      - name: Tauri build without bundling
+        run: npm run tauri:build:no-bundle

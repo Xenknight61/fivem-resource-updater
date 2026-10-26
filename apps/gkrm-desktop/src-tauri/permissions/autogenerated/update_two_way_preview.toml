@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-update-two-way-preview"
+description = "Enables the update_two_way_preview command without any pre-configured scope."
+commands.allow = ["update_two_way_preview"]
+
+[[permission]]
+identifier = "deny-update-two-way-preview"
+description = "Denies the update_two_way_preview command without any pre-configured scope."
+commands.deny = ["update_two_way_preview"]

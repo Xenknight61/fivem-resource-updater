@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-update-recovery-retire-terminal"
+description = "Enables the update_recovery_retire_terminal command without any pre-configured scope."
+commands.allow = ["update_recovery_retire_terminal"]
+
+[[permission]]
+identifier = "deny-update-recovery-retire-terminal"
+description = "Denies the update_recovery_retire_terminal command without any pre-configured scope."
+commands.deny = ["update_recovery_retire_terminal"]

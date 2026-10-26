@@ -1,0 +1,41 @@
+:root {
+  --background: #0b0f0e;
+  --surface: #111816;
+  --surface-raised: #16201c;
+  /* Rules and panel edges. Deliberately quiet: these separate regions, they do not identify
+     anything you can operate, so the non-text contrast rule does not govern them. */
+  --border: #26302c;
+  /* The visible edge of something you can operate. WCAG 1.4.11 asks 3:1 against the surfaces a
+     control sits on, and --border gives 1.2:1 — a button findable only by reading its label.
+     This clears 3:1 against background, surface and surface-raised alike. */
+  --control-border: #616b67;
+  --text: #e7f0ec;
+  --text-muted: #9aa8a2;
+  --accent: #25c06d;
+  --success: #2fcb75;
+  --warning: #e2a93b;
+  --danger: #e35d5b;
+  --focus: #77e6a8;
+  /* Text on a filled accent surface. Written out in two views before it had a name. */
+  --on-accent: #06120c;
+  /* Content the customer owns. Kept off the green ramp on purpose: the accent already means
+     "official/vendor", so reusing it would make an operator's own preserved edits compete
+     visually with the vendor content they are being protected from. */
+  --yours: #6ba7ff;
+  --font-mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, "Liberation Mono",
+    monospace;
+  --space-4: 4px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-20: 20px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  /* Two steps the screens had drifted apart on: a page is titled at one size and a section is
+     headed at one size, whichever screen you are on. The smaller sizes below these are still
+     set where they are used — they vary by what they sit next to, which is the point of them. */
+  --text-page-title: 1.5rem;
+  --text-section: 1rem;
+}

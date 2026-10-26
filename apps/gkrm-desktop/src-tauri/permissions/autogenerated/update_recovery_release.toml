@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-update-recovery-release"
+description = "Enables the update_recovery_release command without any pre-configured scope."
+commands.allow = ["update_recovery_release"]
+
+[[permission]]
+identifier = "deny-update-recovery-release"
+description = "Denies the update_recovery_release command without any pre-configured scope."
+commands.deny = ["update_recovery_release"]

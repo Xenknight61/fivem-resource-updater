@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-scan-get-resource-detail"
+description = "Enables the scan_get_resource_detail command without any pre-configured scope."
+commands.allow = ["scan_get_resource_detail"]
+
+[[permission]]
+identifier = "deny-scan-get-resource-detail"
+description = "Denies the scan_get_resource_detail command without any pre-configured scope."
+commands.deny = ["scan_get_resource_detail"]
