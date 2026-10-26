@@ -1,0 +1,147 @@
+name: Release
+
+# Builds the downloads for a tag and attaches them to a GitHub release: a portable archive for
+# people who would rather not install anything, and an installer for people who would.
+#
+# It runs the test suite first: a tag that cannot pass its own gates should not become a
+# download. The installer carries no updater and no sidecar; it installs the application and
+# fetches the WebView2 runtime only if the machine does not already have it.
+#
+# The binaries are not code-signed, so Windows SmartScreen warns on first run. The published
+# SHA-256 sums are what a careful person checks instead.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    name: Windows downloads
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: apps/gkrm-desktop/package-lock.json
+
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-release-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-release-${{ runner.os }}-
+
+      - name: The tag must match the version the workspace reports
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          for file in Cargo.toml apps/gkrm-desktop/package.json apps/gkrm-desktop/src-tauri/tauri.conf.json; do
+            grep -q "\"\?version\"\? *[:=] *\"$version\"" "$file" || {
+              echo "$file does not report $version; the tag and the product disagree"
+              exit 1
+            }
+          done
+          echo "version=$version" >> "$GITHUB_ENV"
+
+      - run: npm ci
+        working-directory: apps/gkrm-desktop
+
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Frontend tests
+        run: npm run test:unit
+        working-directory: apps/gkrm-desktop
+
+      - name: Build the command line tool
+        run: cargo build --release -p gkrm-cli
+
+      - name: Build the application and its installer
+        run: |
+          rm -rf target/release/bundle
+          npm --prefix apps/gkrm-desktop run tauri:build:installer
+
+      - name: Assemble the downloads
+        run: |
+          name="fivem-resource-updater-${version}-windows-x64"
+          mkdir -p "dist/$name"
+          cp target/release/gkrm-desktop.exe "dist/$name/"
+          cp target/release/gkrm.exe "dist/$name/"
+          cp LICENSE "dist/$name/"
+          cp README.md "dist/$name/"
+          cp THIRD-PARTY-NOTICES.txt "dist/$name/"
+          (cd dist && 7z a -tzip "$name.zip" "$name" >/dev/null)
+          # The bundler names the installer with spaces in it; a download link should not have
+          # them, and the name should say what the archive beside it says.
+          cp target/release/bundle/nsis/*-setup.exe "dist/$name-setup.exe"
+          cp THIRD-PARTY-NOTICES.txt dist/
+          (cd dist && sha256sum "$name.zip" "$name-setup.exe" > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+          {
+            echo "archive=dist/$name.zip"
+            echo "installer=dist/$name-setup.exe"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          notes=$(mktemp)
+          {
+            echo "### Download"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| \`$(basename "$installer")\` | Installs it, puts it in the Start menu, and offers an uninstall. Fetches the WebView2 runtime only if your machine lacks it. |"
+            echo "| \`$(basename "$archive")\` | The same application and command line tool in a folder. Unzip anywhere and run \`gkrm-desktop.exe\`; nothing is installed. |"
+            echo
+            echo "### Windows will warn you the first time"
+            echo
+            echo "Neither download is code-signed, so SmartScreen says it protected your PC."
+            echo "Choose **More info**, then **Run anyway**. To check you have what was"
+            echo "published, compare against \`SHA256SUMS.txt\`:"
+            echo
+            echo '```'
+            echo "certutil -hashfile $(basename "$archive") SHA256"
+            echo '```'
+            echo
+            echo "### What it is built from"
+            echo
+            echo "\`THIRD-PARTY-NOTICES.txt\` lists every component inside these downloads and"
+            echo "reproduces its licence. Both downloads carry a copy of it as well."
+            echo
+            echo "### Requirements"
+            echo
+            echo "Windows 10 or 11. The portable archive needs the Microsoft Edge WebView2"
+            echo "runtime already present, which recent Windows installs have; the installer"
+            echo "will fetch it if it is missing."
+          } > "$notes"
+          gh release create "$tag" \
+            "$installer" "$archive" dist/SHA256SUMS.txt dist/THIRD-PARTY-NOTICES.txt \
+            --title "$tag" --notes-file "$notes" --verify-tag

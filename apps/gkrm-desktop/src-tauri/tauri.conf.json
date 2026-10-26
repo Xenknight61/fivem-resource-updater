@@ -35,11 +35,16 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "targets": ["nsis"],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper" }
+    },
     "publisher": "xenknight",
     "copyright": "Copyright (c) 2026 xenknight",
     "licenseFile": "../../../LICENSE",
     "externalBin": [],
+    "resources": ["../../../THIRD-PARTY-NOTICES.txt"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

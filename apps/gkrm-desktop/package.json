@@ -20,6 +20,8 @@
     "audit:production": "npm audit --omit=dev",
     "audit:full": "npm audit",
     "verify:no-bundle-output": "node scripts/verify-no-bundle-output.mjs",
+    "notices": "node ../../.github/scripts/generate-third-party-notices.mjs > ../../THIRD-PARTY-NOTICES.txt",
+    "tauri:build:installer": "npm run check:runtime && npm run notices && tauri build",
     "tauri:build:no-bundle": "npm run check:runtime && tauri build --no-bundle && npm run verify:no-bundle-output",
     "tauri": "tauri"
   },
