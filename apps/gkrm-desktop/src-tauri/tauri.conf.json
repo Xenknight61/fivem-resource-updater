@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Resource Manager",
+        "title": "FiveM Resource Updater",
         "width": 1180,
         "height": 760,
         "minWidth": 760,

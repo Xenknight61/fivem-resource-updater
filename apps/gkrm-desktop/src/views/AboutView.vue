@@ -38,7 +38,7 @@ const principles = [
   <section class="about-view" aria-labelledby="about-heading">
     <header class="about-header">
       <p class="eyebrow">About</p>
-      <h1 id="about-heading">Resource Manager</h1>
+      <h1 id="about-heading">FiveM Resource Updater</h1>
       <p class="lede">
         A local desktop application for inspecting, reviewing, updating, and recovering FiveM
         resources safely.

@@ -123,7 +123,7 @@ fn successful_text_output_is_concise_and_deterministic() {
     assert_eq!(first.stdout, second.stdout);
 
     let stdout = String::from_utf8(first.stdout).expect("stdout should be UTF-8");
-    assert!(stdout.contains("Resource Manager - Inspection"));
+    assert!(stdout.contains("FiveM Resource Updater - Inspection"));
     assert!(stdout.contains("Installed resources: 1"));
     assert!(stdout.contains("Incoming resources: 2"));
     assert!(stdout.contains("Matched resources: 1"));

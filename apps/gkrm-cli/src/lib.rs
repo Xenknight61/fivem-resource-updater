@@ -29,7 +29,7 @@ pub const EXIT_PIPELINE: i32 = 3;
 
 #[derive(Debug, Parser)]
 #[command(name = "gkrm")]
-#[command(about = "Resource Manager")]
+#[command(about = "FiveM Resource Updater")]
 #[command(version)]
 #[command(color = ColorChoice::Never)]
 pub struct Cli {
@@ -503,7 +503,7 @@ fn render_text(report: &FullInspectionReport) -> String {
     let counts = &presentation.counts;
     let mut output = String::new();
 
-    output.push_str("Resource Manager - Inspection\n\n");
+    output.push_str("FiveM Resource Updater - Inspection\n\n");
     output.push_str(&format!(
         "Installed resources: {}\n",
         counts.installed_resources
@@ -592,7 +592,7 @@ fn render_plan_text(report: &FullInspectionReport, plan: &BaselineFreeUpdatePlan
     let counts = &presentation.counts;
     let mut output = String::new();
 
-    output.push_str("Resource Manager - Baseline-Free Update Plan\n\n");
+    output.push_str("FiveM Resource Updater - Baseline-Free Update Plan\n\n");
     output.push_str("These are conservative recommendations only. No files were changed.\n\n");
     output.push_str(&format!(
         "Resources planned: {}\n",

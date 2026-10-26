@@ -163,7 +163,7 @@ describe('desktop shell', () => {
     for (const path of ['/', '/history', '/about']) {
       await router.push(path)
       await flushPromises()
-      expect(wrapper.text()).toContain('Resource Manager')
+      expect(wrapper.text()).toContain('FiveM Resource Updater')
       expect(wrapper.find('[aria-current="page"]').exists()).toBe(true)
       expect(wrapper.findAll('h1')).toHaveLength(1)
     }

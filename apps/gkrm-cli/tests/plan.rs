@@ -151,7 +151,7 @@ fn successful_text_output_is_concise_read_only_and_deterministic() {
     assert!(!temp.path().join("resources/gksphone/new.lua").exists());
 
     let stdout = String::from_utf8(first.stdout).expect("stdout should be UTF-8");
-    assert!(stdout.contains("Resource Manager - Baseline-Free Update Plan"));
+    assert!(stdout.contains("FiveM Resource Updater - Baseline-Free Update Plan"));
     assert!(stdout.contains("These are conservative recommendations only. No files were changed."));
     assert!(stdout.contains("Recommendations"));
     assert!(!stdout.contains("Actions"));

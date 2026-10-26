@@ -33,7 +33,7 @@ const showGlobalError = computed(() => {
   <a class="skip-link" href="#main-content">Skip to content</a>
   <div class="app-shell">
     <header class="title-bar">
-      <span class="brand-name">Resource <span>Manager</span></span>
+      <span class="brand-name">FiveM Resource <span>Updater</span></span>
       <nav class="quick-nav" aria-label="Primary">
         <RouterLink
           v-for="item in navigationItems"

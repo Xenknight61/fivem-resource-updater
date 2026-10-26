@@ -68,5 +68,5 @@ pub fn run() {
             storage_release,
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run Resource Manager");
+        .expect("failed to run FiveM Resource Updater");
 }
