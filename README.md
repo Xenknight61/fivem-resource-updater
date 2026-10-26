@@ -1,4 +1,4 @@
-# GKSHOP Resource Manager
+# FiveM Resource Updater
 
 **Update a FiveM resource without losing the work you did to it.**
 

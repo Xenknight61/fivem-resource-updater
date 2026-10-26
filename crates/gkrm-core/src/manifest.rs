@@ -1120,7 +1120,7 @@ b',
     fn ignores_custom_metadata_without_warnings() {
         let (manifest, warnings) = parse(
             r#"
-            author 'GKSHOP'
+            author 'Example Studio'
             description 'FiveM Phone'
             custom_metadata 'value'
             "#,

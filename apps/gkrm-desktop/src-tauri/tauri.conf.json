@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "productName": "Resource Manager",
+  "productName": "FiveM Resource Updater",
   "version": "1.0.0",
-  "identifier": "com.gkshop.resource-manager",
+  "identifier": "com.xenknight.fivem-resource-updater",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",

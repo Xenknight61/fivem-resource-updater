@@ -1,6 +1,6 @@
 # Fixtures
 
-Only synthetic test fixtures belong here. Do not commit real GKSHOP commercial resources, escrow-protected files, customer installations, credentials, or production ZIP packages.
+Only synthetic test fixtures belong here. Do not commit real commercial resources, escrow-protected files, customer installations, credentials, or production ZIP packages.
 
 ## Layout
 
