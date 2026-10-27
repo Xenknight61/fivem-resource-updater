@@ -1482,6 +1482,7 @@ mod tests {
     use std::io::Cursor;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
+    use std::time::Duration;
 
     use super::*;
     use tempfile::tempdir;
@@ -1634,14 +1635,28 @@ mod tests {
         let file = root.join("file.lua");
         fs::write(&file, b"aaaaaaaaaaaaaaaa").expect("file should be written");
         let preflighted = preflight_test_file(root, "file.lua");
+        let later = preflighted
+            .modified
+            .checked_add(Duration::from_secs(2))
+            .expect("a later modified time should exist");
         let mut buffer = [0_u8; 4];
         set_metadata_check_interval_override(4);
         set_hash_progress_hook({
-            let file = file.clone();
+            let root = root.to_path_buf();
             let mut changed = false;
             move |pass, bytes_read| {
                 if pass == HashVerificationPass::First && bytes_read >= 4 && !changed {
-                    fs::write(&file, b"bbbbbbbbbbbbbbbb").expect("file should be changed");
+                    fs::write(root.join("file.lua"), b"bbbbbbbbbbbbbbbb")
+                        .expect("file should be changed");
+                    // A same-size write in place leaves both the size and the file identity
+                    // alone, so the modified time is the only thing the periodic check can
+                    // notice it by -- and whether the clock has ticked since the preflight is
+                    // not something a test gets to decide. Setting it by hand is what makes
+                    // this about the check rather than about the filesystem's timestamp
+                    // granularity; left to chance the change is still refused, but by the
+                    // digest comparison two passes later, and this test would then be proving
+                    // something it does not claim to.
+                    restore_mtime(&root, "file.lua", later);
                     changed = true;
                 }
             }
