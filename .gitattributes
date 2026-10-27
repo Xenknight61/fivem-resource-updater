@@ -3,3 +3,9 @@
 # fixture file look changed and would silently invalidate the update demo.
 fixtures/** text eol=lf
 fixtures/packages/*.zip binary
+
+# The DTO fixtures are the same promise in the other direction: they are compared byte for
+# byte against what Rust serializes, and serde ends its lines with \n. Converting them on
+# checkout makes that comparison fail on a Windows clone while passing wherever the clone
+# happened to keep \n -- a test that only runs where somebody is not looking.
+apps/gkrm-desktop/src/services/tauri/fixtures/** text eol=lf
