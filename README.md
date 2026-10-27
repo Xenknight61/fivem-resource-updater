@@ -60,18 +60,22 @@ have. The core carries POSIX paths as well, but Windows is what is built and ver
 
 ## Getting it
 
-Download the archive from [Releases](../../releases), unzip it anywhere, and run
-`gkrm-desktop.exe`. There is nothing to install and nothing to uninstall; `gkrm.exe` beside it is
-the command-line tool.
+[Releases](../../releases) offers two downloads of the same application. Take whichever suits
+you:
+
+* **The installer** puts it in the Start menu and leaves you an uninstaller. It fetches the
+  Microsoft Edge WebView2 runtime if your machine does not already have it.
+* **The archive** unzips anywhere and runs from wherever you put it — nothing is installed and
+  there is nothing to uninstall. `gkrm-desktop.exe` is the application, and `gkrm.exe` beside it
+  is the command-line tool, which only this download carries.
 
 **Windows will warn you the first time.** The binaries are not code-signed — the certificate that
 would silence that warning costs money this project does not take — so SmartScreen says it
-protected your PC. Choose **More info**, then **Run anyway**. Every release publishes the SHA-256
-of its archive, so you can check that what you downloaded is what was built:
+protected your PC. Choose **More info**, then **Run anyway**.
 
-```bash
-certutil -hashfile fivem-resource-updater-1.0.0-windows-x64.zip SHA256
-```
+Each release's notes are the changelog for that version. Everything in a download is built by
+[the release workflow](.github/workflows/release.yml) from the tag it is named after, in public,
+and you can build it yourself from the same source below.
 
 ### Building it yourself
 

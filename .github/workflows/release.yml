@@ -7,8 +7,11 @@ name: Release
 # download. The installer carries no updater and no sidecar; it installs the application and
 # fetches the WebView2 runtime only if the machine does not already have it.
 #
-# The binaries are not code-signed, so Windows SmartScreen warns on first run. The published
-# SHA-256 sums are what a careful person checks instead.
+# The notes are the changelog for the tag, generated from its commits by git-cliff. What a
+# person needs in order to use a download lives in the README instead of being restated on every
+# release, where it would go out of date one release at a time.
+#
+# The binaries are not code-signed, so Windows SmartScreen warns on first run.
 
 on:
   push:
@@ -39,6 +42,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+          # The notes are generated from the history between this tag and the one before it, so
+          # the whole history has to be here. A shallow fetch does not fail at this -- it
+          # produces notes covering only the commits it happens to have, which look like a
+          # complete changelog and are not. The step below refuses to publish from one.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -52,6 +60,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.cargo/bin
             target
           key: cargo-release-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-release-${{ runner.os }}-
@@ -67,6 +76,31 @@ jobs:
             }
           done
           echo "version=$version" >> "$GITHUB_ENV"
+
+      # Before the tests and the builds, so a template that cannot render costs a minute rather
+      # than twenty, and so nothing is built for a release that could not describe itself.
+      - name: The changelog for this tag
+        run: |
+          # Notes generated from part of the history read as though they were the whole
+          # changelog, and nothing downstream can tell the difference, so this is checked before
+          # anything is written rather than after: a tag can be moved and pushed again, a
+          # published release cannot be unsaid.
+          if [ "$(git rev-parse --is-shallow-repository)" != "false" ]; then
+            echo "this clone is shallow, so the notes would cover only the commits it happens to"
+            echo "have; the checkout needs fetch-depth: 0"
+            exit 1
+          fi
+
+          cargo install git-cliff --locked --version 2.14.2
+          mkdir -p dist
+          notes="$(pwd)/dist/notes.md"
+          git-cliff --latest --output "$notes"
+          if [ ! -s "$notes" ]; then
+            echo "git-cliff produced no notes for $GITHUB_REF_NAME; check cliff.toml"
+            exit 1
+          fi
+          cat "$notes"
+          echo "notes=$notes" >> "$GITHUB_ENV"
 
       - run: npm ci
         working-directory: apps/gkrm-desktop
@@ -99,9 +133,6 @@ jobs:
           # The bundler names the installer with spaces in it; a download link should not have
           # them, and the name should say what the archive beside it says.
           cp target/release/bundle/nsis/*-setup.exe "dist/$name-setup.exe"
-          cp THIRD-PARTY-NOTICES.txt dist/
-          (cd dist && sha256sum "$name.zip" "$name-setup.exe" > SHA256SUMS.txt)
-          cat dist/SHA256SUMS.txt
           {
             echo "archive=dist/$name.zip"
             echo "installer=dist/$name-setup.exe"
@@ -112,36 +143,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
-          notes=$(mktemp)
-          {
-            echo "### Download"
-            echo
-            echo "| | |"
-            echo "| --- | --- |"
-            echo "| \`$(basename "$installer")\` | Installs it, puts it in the Start menu, and offers an uninstall. Fetches the WebView2 runtime only if your machine lacks it. |"
-            echo "| \`$(basename "$archive")\` | The same application and command line tool in a folder. Unzip anywhere and run \`gkrm-desktop.exe\`; nothing is installed. |"
-            echo
-            echo "### Windows will warn you the first time"
-            echo
-            echo "Neither download is code-signed, so SmartScreen says it protected your PC."
-            echo "Choose **More info**, then **Run anyway**. To check you have what was"
-            echo "published, compare against \`SHA256SUMS.txt\`:"
-            echo
-            echo '```'
-            echo "certutil -hashfile $(basename "$archive") SHA256"
-            echo '```'
-            echo
-            echo "### What it is built from"
-            echo
-            echo "\`THIRD-PARTY-NOTICES.txt\` lists every component inside these downloads and"
-            echo "reproduces its licence. Both downloads carry a copy of it as well."
-            echo
-            echo "### Requirements"
-            echo
-            echo "Windows 10 or 11. The portable archive needs the Microsoft Edge WebView2"
-            echo "runtime already present, which recent Windows installs have; the installer"
-            echo "will fetch it if it is missing."
-          } > "$notes"
           gh release create "$tag" \
-            "$installer" "$archive" dist/SHA256SUMS.txt dist/THIRD-PARTY-NOTICES.txt \
+            "$installer" "$archive" \
             --title "$tag" --notes-file "$notes" --verify-tag

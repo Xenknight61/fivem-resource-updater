@@ -1,0 +1,64 @@
+# git-cliff ~ configuration file
+# https://git-cliff.org/docs/configuration
+#
+# A release's notes are generated from the commits it contains, so what a release says it changed
+# is what was actually committed to produce it. Commit subjects here are written as plain prose
+# rather than as labels, so they are reproduced as they stand instead of being reshaped.
+#
+# Everything a person needs in order to use a download -- which file to take, the SmartScreen
+# warning, what the application requires -- is in the README, which is where it stays current.
+# The notes say what changed.
+
+[changelog]
+header = ""
+
+body = """
+{% if version %}\
+## {{ version | trim_start_matches(pat="v") }} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## Unreleased
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}{{ commit.message | upper_first }} ({{ commit.id | truncate(length=7, end="") }})\
+{% endfor %}
+{% endfor %}\
+"""
+
+footer = ""
+trim = true
+
+[git]
+# Parse the commits as https://www.conventionalcommits.org describes.
+conventional_commits = true
+# Keep the ones that are not: the catch-all parser below gives them a home, which is better than
+# dropping a change out of the record because its subject was written in another shape.
+filter_unconventional = false
+split_commits = false
+
+# The group names are what a reader sees, so they say what happened rather than naming a commit
+# type. The HTML comments are sort keys and do not appear: they are what fixes the order of the
+# sections, since the template groups in the order it meets them.
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->Added" },
+  { message = "^fix", group = "<!-- 1 -->Fixed" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = "^refactor", group = "<!-- 3 -->Changed" },
+  { message = "^docs", group = "<!-- 4 -->Documentation" },
+  { message = "^[Rr]evert", group = "<!-- 5 -->Reverted" },
+  # Housekeeping that changes nothing a user of a release can observe.
+  { message = "^style", skip = true },
+  { message = "^test", skip = true },
+  { message = "^chore", skip = true },
+  { message = "^ci", skip = true },
+  { message = "^build", skip = true },
+  { message = ".*", group = "<!-- 6 -->Other" },
+]
+
+# A breaking change is reported even when its type would otherwise be skipped.
+protect_breaking_commits = true
+filter_commits = false
+tag_pattern = "v[0-9]*"
+topo_order = false
+sort_commits = "oldest"
