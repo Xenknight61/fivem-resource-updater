@@ -104,14 +104,28 @@ function rustPackages() {
  * that exist only for development carry `dev: true` and are not in the product.
  */
 function npmPackages(appDir) {
+  // The lockfile names the packages, but their licence texts are only on disk once they are
+  // installed. Without that, every entry below would resolve to nothing and the notices would
+  // come out missing the whole frontend -- silently, and for a file that exists to satisfy a
+  // licence obligation. So this stops instead.
+  if (!existsSync(join(appDir, 'node_modules'))) {
+    throw new Error(
+      `${join(appDir, 'node_modules')} is not there, so no npm licence text can be read; ` +
+        'run `npm ci` in apps/gkrm-desktop first',
+    )
+  }
+
   const lock = JSON.parse(readFileSync(join(appDir, 'package-lock.json'), 'utf8'))
   const paths = Object.entries(lock.packages ?? {})
     .filter(([path, entry]) => path.startsWith('node_modules/') && entry.dev !== true)
     .map(([path]) => join(appDir, path))
 
-  return [...new Set(paths)]
+  const packages = [...new Set(paths)]
     .map((dir) => {
       const manifest = join(dir, 'package.json')
+      // A production entry can legitimately be absent: the lockfile names optional packages for
+      // every platform, and npm installs only the ones this one needs. What is not installed is
+      // not in the product.
       if (!existsSync(manifest)) return null
       const pkg = JSON.parse(readFileSync(manifest, 'utf8'))
       const licence =
@@ -125,6 +139,15 @@ function npmPackages(appDir) {
       }
     })
     .filter(Boolean)
+
+  if (paths.length > 0 && packages.length === 0) {
+    throw new Error(
+      `the lockfile names ${paths.length} production packages and none of them is installed ` +
+        'under node_modules; run `npm ci` in apps/gkrm-desktop first',
+    )
+  }
+
+  return packages
 }
 
 function section(title, packages) {

@@ -9,3 +9,8 @@ fixtures/packages/*.zip binary
 # checkout makes that comparison fail on a Windows clone while passing wherever the clone
 # happened to keep \n -- a test that only runs where somebody is not looking.
 apps/gkrm-desktop/src/services/tauri/fixtures/** text eol=lf
+
+# The notices file is generated, with \n, and continuous integration regenerates it and
+# compares the result. Converting it on checkout would make that comparison fail on every
+# line for a file whose content had not changed at all.
+THIRD-PARTY-NOTICES.txt text eol=lf

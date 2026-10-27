@@ -82,17 +82,6 @@ jobs:
       - name: Fixtures are unchanged by the read-only surfaces
         run: git diff --exit-code -- fixtures
 
-      # The notices are generated from the lockfiles and committed, because the bundler needs
-      # the file to exist before it can build. Regenerating here is what keeps the committed
-      # copy honest when a dependency changes.
-      - name: Third-party notices are current
-        run: |
-          node .github/scripts/generate-third-party-notices.mjs > /tmp/notices.txt
-          diff -u THIRD-PARTY-NOTICES.txt /tmp/notices.txt || {
-            echo "THIRD-PARTY-NOTICES.txt is stale; run npm --prefix apps/gkrm-desktop run notices"
-            exit 1
-          }
-
       - name: No bundle, installer, or updater output
         run: |
           if [ -e target/release/bundle ]; then
@@ -140,3 +129,15 @@ jobs:
 
       - name: Tauri build without bundling
         run: npm run tauri:build:no-bundle
+
+      # The notices are generated from both lockfiles and committed, because the bundler needs
+      # the file to exist before it can build. Regenerating here is what keeps the committed
+      # copy honest when a dependency changes. It belongs in this job rather than beside the
+      # other Rust gates: half of what it reads is `node_modules`, which only exists here.
+      - name: Third-party notices are current
+        run: |
+          node ../../.github/scripts/generate-third-party-notices.mjs > /tmp/notices.txt
+          diff -u ../../THIRD-PARTY-NOTICES.txt /tmp/notices.txt || {
+            echo "THIRD-PARTY-NOTICES.txt is stale; run npm --prefix apps/gkrm-desktop run notices"
+            exit 1
+          }
