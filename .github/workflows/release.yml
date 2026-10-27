@@ -124,7 +124,7 @@ jobs:
         run: |
           name="fivem-resource-updater-${version}-windows-x64"
           mkdir -p "dist/$name"
-          cp target/release/gkrm-desktop.exe "dist/$name/"
+          cp "target/release/FiveM Resource Updater.exe" "dist/$name/"
           cp target/release/gkrm.exe "dist/$name/"
           cp LICENSE "dist/$name/"
           cp README.md "dist/$name/"

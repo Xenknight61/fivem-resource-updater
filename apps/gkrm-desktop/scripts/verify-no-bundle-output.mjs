@@ -11,14 +11,18 @@ const forbidden = [
   { name: 'bundle directory', matches: (path, isDir) => isDir && basename(path).toLowerCase() === 'bundle' },
   { name: 'msi installer', matches: (path) => path.toLowerCase().endsWith('.msi') },
   { name: 'setup exe', matches: (path) => basename(path).toLowerCase().endsWith('-setup.exe') },
-  { name: 'nsis archive', matches: (path) => basename(path).toLowerCase().endsWith('.nsis.zip') },
+  // Tauri's updater emits an archive of the bundle it updates to, and a signature beside it.
+  // Those are the artefacts to look for. Matching the word "updater" anywhere in a filename is
+  // not: this application is called FiveM Resource Updater, so its own binary carried the word
+  // and was reported as updater output the moment the binary took the product's name.
+  { name: 'updater archive', matches: (path) => /\.(nsis|msi|app)\.(zip|tar\.gz)$/i.test(path) },
+  { name: 'updater signature', matches: (path) => path.toLowerCase().endsWith('.sig') },
   { name: 'appx package', matches: (path) => path.toLowerCase().endsWith('.appx') },
   { name: 'msix package', matches: (path) => path.toLowerCase().endsWith('.msix') },
   { name: 'dmg image', matches: (path) => path.toLowerCase().endsWith('.dmg') },
   { name: 'deb package', matches: (path) => path.toLowerCase().endsWith('.deb') },
   { name: 'rpm package', matches: (path) => path.toLowerCase().endsWith('.rpm') },
   { name: 'AppImage package', matches: (path) => path.endsWith('.AppImage') },
-  { name: 'updater artifact', matches: (path) => basename(path).toLowerCase().includes('updater') },
 ]
 
 function walk(path, findings) {

@@ -66,8 +66,8 @@ you:
 * **The installer** puts it in the Start menu and leaves you an uninstaller. It fetches the
   Microsoft Edge WebView2 runtime if your machine does not already have it.
 * **The archive** unzips anywhere and runs from wherever you put it — nothing is installed and
-  there is nothing to uninstall. `gkrm-desktop.exe` is the application, and `gkrm.exe` beside it
-  is the command-line tool, which only this download carries.
+  there is nothing to uninstall. `FiveM Resource Updater.exe` is the application, and `gkrm.exe`
+  beside it is the command-line tool, which only this download carries.
 
 **Windows will warn you the first time.** The binaries are not code-signed — the certificate that
 would silence that warning costs money this project does not take — so SmartScreen says it
@@ -91,8 +91,8 @@ npm --prefix apps/gkrm-desktop ci
 npm --prefix apps/gkrm-desktop run tauri:build:no-bundle
 ```
 
-The application is then `target/release/gkrm-desktop.exe`, and the command-line tool is
-`target/release/gkrm.exe`.
+The application is then `target/release/FiveM Resource Updater.exe`, and the command-line tool
+is `target/release/gkrm.exe`.
 
 ## Using it
 
