@@ -285,7 +285,10 @@ mod tests {
             Some("TrustedTransactionalApplyExecutionTransactionExists".to_owned()),
         );
         assert!(
-            line.starts_with("2026-08-28 14:02:11  1.0.0  apply    REFUSED"),
+            line.starts_with(&format!(
+                "2026-08-28 14:02:11  {}  apply    REFUSED",
+                env!("CARGO_PKG_VERSION")
+            )),
             "{line}"
         );
         assert!(
@@ -315,7 +318,16 @@ mod tests {
         // Across restarts, which run an entry belongs to is the context a reader needs, and an
         // empty file would otherwise be indistinguishable from one that was never wired up.
         let line = compose("2026-08-29 20:15:00", "start", Outcome::Ok, "", None);
-        assert_eq!(line, "2026-08-29 20:15:00  1.0.0  start    OK\n");
+        // The version in the line is the one the crate was built with. Writing the number out
+        // here made both of these tests fail on every release, which says nothing about the
+        // line and everything about the number having been copied.
+        assert_eq!(
+            line,
+            format!(
+                "2026-08-29 20:15:00  {}  start    OK\n",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
     }
 
     #[test]
