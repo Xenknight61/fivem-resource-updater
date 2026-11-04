@@ -1,12 +1,70 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
+import ActionBar from '@/components/ActionBar.vue'
+import Disclosure from '@/components/Disclosure.vue'
+import PageHeader from '@/components/PageHeader.vue'
+import StatusNotice from '@/components/StatusNotice.vue'
 import { useRecoveryStore } from '@/stores/recovery'
 import { useUpdateStore } from '@/stores/update'
-import type { TwoWayDiffRow, TwoWayFileDisposition } from '@/types/commands'
+import type { TwoWayDiffRow, TwoWayFile, TwoWayFileDisposition } from '@/types/commands'
 
 const update = useUpdateStore()
 const recovery = useRecoveryStore()
+const setupStatus = computed(() => {
+  if (update.loading.compare) return 'Comparing your installation with the selected package…'
+  if (update.folder === undefined) return 'Choose your installed resource to begin.'
+  if (update.package === undefined) return 'Choose the new ZIP package to continue.'
+  return 'Ready to compare. Your installation stays unchanged.'
+})
+const fileGroups = computed(() => [
+  { disposition: 'review', label: 'Review' },
+  { disposition: 'take_from_update', label: 'From update' },
+  { disposition: 'keep_local_only', label: 'Only installed' },
+  { disposition: 'unchanged', label: 'Unchanged' },
+].map((group) => ({
+  ...group,
+  files: update.changedFiles.filter((file) => file.disposition === group.disposition),
+})).filter((group) => group.files.length > 0))
+
+function preserveLabel(file: TwoWayFile): string {
+  return file.blockCount > 0 || file.mergedByKey
+    ? 'Merge · preserve my edits'
+    : 'Keep installed file'
+}
+
+function pendingChoice(path: string): boolean {
+  return !applied.value && update.pendingWholeFiles.some((file) => file.path === path)
+}
+
+function chooseOutcome(path: string, event: Event) {
+  if (event.target instanceof HTMLSelectElement) {
+    update.setFileChoice(path, event.target.value === 'replace')
+  }
+}
+
+function chooseBulkOutcome(event: Event) {
+  if (event.target instanceof HTMLSelectElement) {
+    update.setEveryFileChoice(event.target.value === 'replace')
+  }
+}
+
+async function navigateFiles(event: KeyboardEvent) {
+  if (!(event.target instanceof HTMLButtonElement) || !event.target.matches('.file')) return
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  if (update.loading.compare) return
+  const buttons = Array.from(event.currentTarget instanceof HTMLElement
+    ? event.currentTarget.querySelectorAll<HTMLButtonElement>('details[open] .file') : [])
+  const index = buttons.indexOf(event.target)
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+    : Math.max(0, Math.min(buttons.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))
+  const target = buttons[next]
+  if (target === undefined) return
+  target.focus()
+  const path = target.dataset.path
+  if (path !== undefined) await update.openFile(path)
+}
 const confirmation = ref<HTMLElement>()
 let returnFocus: HTMLElement | undefined
 watch(() => update.confirming, async (open) => {
@@ -65,12 +123,13 @@ const noDiffReason = computed(() => {
         ? "The update's version of this file will be used."
         : 'This file is encrypted by the developer. You could not have edited it, so the update replaces it.'
     case 'review':
+      if (takesUpdate(file.path) && update.diff?.mergedByKey === true) {
+        return 'The update replaces this entire file. Your existing values are not kept.'
+      }
       if (update.preview?.unmergeable.includes(file.path) !== true) {
         return 'There is nothing to show for this file.'
       }
-      return update.diff?.mergedByKey === true
-        ? `${wholeFileReason.value} Tick it on the left to take the update’s version untouched instead.`
-        : `${wholeFileReason.value} Tick it on the left to take the update’s version whole; left unticked, yours stays exactly as it is.`
+      return wholeFileReason.value
     default:
       return 'There is nothing to show for this file.'
   }
@@ -149,7 +208,7 @@ const wholeFileReason = computed(() => {
  */
 const keptKeys = computed(() => {
   const diff = update.diff
-  if (diff?.mergedByKey !== true) return undefined
+  if (diff?.mergedByKey !== true || (selected.value !== undefined && takesUpdate(selected.value.path))) return undefined
   const shown = diff.keptKeys ?? []
   const total = diff.keptKeyCount ?? shown.length
   return { shown, more: Math.max(0, total - shown.length), total }
@@ -176,38 +235,9 @@ const baselineInPlay = computed(
     update.package !== undefined,
 )
 
-/**
- * Whether this file is one the operator can answer.
- *
- * Every file that differs and is theirs to have edited. Identical, encrypted, or theirs alone is
- * already settled, and offering a tick for one of those would promise a choice that does not
- * exist. A file with no lines to show is still a choice: the whole of one side or the other.
- */
-function decidable(file: { disposition: TwoWayFileDisposition }): boolean {
-  return file.disposition === 'review'
-}
-
 /** True when this file has been handed to the update whole. */
 function takesUpdate(path: string): boolean {
   return update.choices[path] !== undefined
-}
-
-/**
- * Hand one file to the update, or take it back.
- *
- * A file is answered whole. Half of one side and half of the other is a file neither the operator
- * nor the developer ever had, and nothing downstream — not Lua, not the resource — is obliged to
- * survive it. Unticked, the file is merged: what the update adds arrives, and the lines the
- * operator wrote stay theirs.
- */
-function toggleFile(path: string) {
-  if (applied.value) return
-  update.setFileChoice(path, !takesUpdate(path))
-}
-
-function toggleEveryFile() {
-  if (applied.value) return
-  update.setEveryFileChoice(!update.everyFileTaken)
 }
 
 /**
@@ -239,6 +269,7 @@ function outcomeFor(file: {
     case 'take_from_update':
       return 'from the update'
     case 'review':
+      if (pendingChoice(file.path)) return 'Decision required'
       if (takesUpdate(file.path) || update.sweepIsWholeUpdate) return 'from the update'
       if (file.blockCount > 0) return 'merged, your lines kept'
       // A document combined by key is merged too, just not by line.
@@ -311,7 +342,7 @@ const sameVersion = computed(() => {
   return from !== undefined && to !== undefined && from === to ? from : undefined
 })
 
-const applyLabel = computed(() => (update.loading.apply ? 'Updating…' : 'Update'))
+const applyLabel = computed(() => (update.loading.apply ? 'Updating…' : 'Apply update'))
 
 const summaryLine = computed(() => {
   const summary = update.preview?.summary
@@ -347,7 +378,9 @@ const summaryLine = computed(() => {
     parts.push(`${update.untouchedFiles.length} you never changed`)
   }
   // A file nothing can be merged for is not merged. Counting it as one would be the tidy lie.
-  const wholeFile = update.wholeFileAnswers.filter((file) => update.choices[file.path] === undefined)
+  const wholeFile = update.wholeFileAnswers.filter((file) =>
+    update.choices[file.path] === undefined && update.reviewedWholeFiles.includes(file.path),
+  )
   if (wholeFile.length > 0) {
     parts.push(`${wholeFile.length} stays yours whole`)
   }
@@ -356,11 +389,22 @@ const summaryLine = computed(() => {
 </script>
 
 <template>
-  <section class="update" aria-labelledby="update-heading">
-    <h1 id="update-heading" class="sr-only">Update a resource</h1>
+  <section class="update" :class="{ 'is-setup': !update.preview }" aria-labelledby="update-heading">
+    <PageHeader v-if="!update.preview" class="setup-header" heading-id="update-heading" title="Update a resource" description="Choose your installation and new package to review what changes.">
+      <template #actions><a class="button-link" href="#/history">View history</a></template>
+    </PageHeader>
+    <h1 v-else id="update-heading" class="sr-only">Update a resource</h1>
 
     <!-- Step 1 and 2: the two things the operator actually has. -->
-    <header class="sources">
+    <header v-if="update.preview" class="source-summary">
+      <div>
+        <strong>{{ update.preview.resource }}</strong>
+        <span v-if="versionMove" class="versions">{{ versionMove }}</span>
+        <p class="muted">{{ update.folder?.displayLabel }} · {{ update.package?.displayLabel }}</p>
+      </div>
+      <button type="button" :disabled="!update.canChooseSources" @click="update.changeSources()">Change sources</button>
+    </header>
+    <div v-else class="sources setup-sources">
       <button
         type="button"
         class="source"
@@ -368,7 +412,10 @@ const summaryLine = computed(() => {
         :disabled="update.loading.folder || !update.canChooseSources"
         @click="update.chooseFolder()"
       >
-        <span class="step">1. Installed resource</span>
+        <span class="source-copy">
+          <span class="step">1. Installed resource</span>
+          <span class="source-hint">The resource folder you use on your server.</span>
+        </span>
         <span class="value">{{ update.folder?.displayLabel ?? 'Choose folder…' }}</span>
       </button>
       <button
@@ -378,7 +425,10 @@ const summaryLine = computed(() => {
         :disabled="!update.canChoosePackages || update.loading.package"
         @click="update.choosePackage()"
       >
-        <span class="step">2. New package</span>
+        <span class="source-copy">
+          <span class="step">2. New package</span>
+          <span class="source-hint">The ZIP you downloaded from the developer.</span>
+        </span>
         <span class="value">
           {{ update.package?.displayLabel ?? (update.canChoosePackages ? 'Choose ZIP…' : 'Choose the resource first') }}
         </span>
@@ -390,49 +440,54 @@ const summaryLine = computed(() => {
         :disabled="!update.canChoosePackages || update.loading.baseline"
         @click="update.chooseBaseline()"
       >
-        <span class="step">3. Installed from — optional</span>
+        <span class="source-copy">
+          <span class="step">Add original package — optional</span>
+          <span class="source-hint">The ZIP you originally installed. Fewer files to review.</span>
+        </span>
         <span class="value">
           {{
-            update.baseline?.displayLabel ??
-            (update.canChoosePackages ? 'Choose the ZIP you installed…' : 'Choose the resource first')
+            update.baseline?.displayLabel ?? (update.canChoosePackages ? 'Choose original ZIP…' : 'Choose the resource first')
           }}
         </span>
       </button>
-      <button
-        type="button"
-        class="compare"
-        :disabled="!update.canCompare"
-        @click="update.compare()"
-      >
-        {{ update.loading.compare ? 'Comparing…' : 'Compare' }}
-      </button>
-    </header>
+    </div>
 
-    <p v-if="baselineInPlay" class="banner baseline" role="status">
-      <span>
-        Comparing against <strong>{{ update.baseline?.displayLabel }}</strong> to tell the files you
-        edited from the ones the developer changed. Nothing is read from it but its own versions of
-        the files.
-      </span>
-      <button type="button" :disabled="!update.canChooseSources" @click="update.forgetBaseline()">
-        Forget it
-      </button>
-    </p>
+    <StatusNotice v-if="update.loading.compare && update.preview">Comparing sources… Your installation stays unchanged.</StatusNotice>
 
-    <p v-if="update.preview?.usedRememberedBaseline === true" class="banner baseline" role="status">
-      <span>
-        Comparing against
-        <strong>{{ rememberedBaseline }}</strong>, which is what this was last updated from. Your
-        edits are told from the developer's without your having to find that package again.
-      </span>
-    </p>
+    <details v-if="baselineInPlay" class="source-details">
+      <summary>Original package · {{ update.baseline?.displayLabel }}</summary>
+      <p class="banner baseline">
+        <span>
+          Comparing against <strong>{{ update.baseline?.displayLabel }}</strong> to tell the files you
+          edited from the ones the developer changed. Nothing is read from it but its own versions of
+          the files.
+        </span>
+        <button type="button" :disabled="!update.canChooseSources" @click="update.forgetBaseline()">
+          Forget it
+        </button>
+      </p>
+    </details>
 
-    <p v-if="update.error" class="banner error" role="alert">
-      <span>{{ errorMessage }}</span>
-      <button type="button" @click="update.dismissError()">Dismiss</button>
-    </p>
+    <details v-if="update.preview?.usedRememberedBaseline === true" class="source-details">
+      <summary>Using the saved original package</summary>
+      <p class="banner baseline">
+        <span>
+          Comparing against
+          <strong>{{ rememberedBaseline }}</strong>, which is what this was last updated from. Your
+          edits are told from the developer's without your having to find that package again.
+        </span>
+      </p>
+    </details>
 
-    <p v-if="update.outcome" class="banner done" role="status">{{ outcomeMessage }}</p>
+    <StatusNotice v-if="update.error" class="banner error" tone="danger">
+      {{ errorMessage }}
+      <template #actions><button type="button" @click="update.dismissError()">Dismiss</button></template>
+    </StatusNotice>
+
+    <StatusNotice v-if="update.outcome" class="banner done" :tone="update.outcome === 'committed' ? 'success' : update.outcome === 'rolled_back' || update.outcome === 'already_up_to_date' ? 'neutral' : 'warning'">
+      {{ outcomeMessage }}
+      <template #actions><a class="text-link" href="#/history">View history</a></template>
+    </StatusNotice>
 
     <div v-if="update.blocked === 'finishable'" class="banner blocked" role="status">
       <span>
@@ -450,70 +505,86 @@ const summaryLine = computed(() => {
 
     <p v-else-if="update.blocked === 'attention'" class="banner error" role="alert">
       An earlier update is still on record and this version cannot close it. Your files and every
-      backup are untouched, but no further update can start until it is dealt with. The Console tab
+      backup are untouched, but no further update can start until it is dealt with. The History tab
       shows what is there.
     </p>
 
-    <div v-if="update.preview === undefined" class="empty">
-      <p>Point at the resource folder you installed and the ZIP you just downloaded.</p>
-      <p class="muted">
-        Nothing is written until you press Update, and every write is backed up first.
-      </p>
-      <p class="muted">
-        The first time, point at the ZIP this was installed from as well: without it, every file
-        you could have edited has to be asked about, and with it only the ones you actually did.
-        After that this keeps the package for you and reaches for it itself.
-      </p>
+    <div v-if="update.preview === undefined" class="setup-note">
+      <Disclosure label="Why add the original package?">
+        <p>
+          It helps tell your edits from the developer’s changes, so there are fewer files to review.
+          You can continue without it. After an update, this app saves the package to use next time.
+        </p>
+      </Disclosure>
     </div>
 
     <div v-else class="panes">
       <!-- The file list, review work first. -->
-      <nav class="files" aria-label="Files in this update">
+      <nav class="files" aria-label="Files in this update" @keydown="navigateFiles">
         <p class="rail-title">
-          <span>{{ update.preview.resource }} · {{ update.preview.summary.total }} files</span>
-          <span v-if="versionMove" class="versions">{{ versionMove }}</span>
+          <span>{{ update.preview.summary.total }} files</span>
+          <span v-if="!applied && update.pendingWholeFiles.length > 0" class="pending-count">{{ update.pendingWholeFiles.length }} {{ update.pendingWholeFiles.length === 1 ? 'needs' : 'need' }} a choice</span>
         </p>
-        <label
+        <div
           v-if="!applied && update.decidableFiles.length > 0"
           class="take-all"
         >
-          <input
-            type="checkbox"
-            :checked="update.everyFileTaken"
-            @change="toggleEveryFile()"
-          />
-          <span>Take every file from the update</span>
-        </label>
-        <ul>
-          <li
-            v-for="file in update.changedFiles"
-            :key="file.path"
-            :class="[
-              'file-row',
-              file.disposition,
-              { current: file.path === update.selectedPath, taken: takesUpdate(file.path), applied },
-            ]"
+          <label for="bulk-outcome">Listed review files · {{ update.decidableFiles.length }}</label>
+          <select
+            id="bulk-outcome"
+            aria-label="Outcome for all listed review files"
+            :value="update.pendingWholeFiles.length > 0 ? 'mixed' : update.everyFileTaken ? 'replace' : update.hasOwnChoices ? 'mixed' : 'preserve'"
+            :disabled="!update.canEditChoices"
+            @change="chooseBulkOutcome"
           >
-            <span v-if="!applied" class="tick">
-              <input
-                v-if="decidable(file)"
-                type="checkbox"
-                :checked="takesUpdate(file.path)"
-                :aria-label="`Take ${file.path} from the update`"
-                @change="toggleFile(file.path)"
-              />
-            </span>
-            <button
-              type="button"
-              class="file"
-              :aria-current="file.path === update.selectedPath ? 'true' : undefined"
-              @click="update.openFile(file.path)"
+            <option disabled value="mixed">{{ update.pendingWholeFiles.length > 0 ? 'Choose outcomes…' : 'Mixed outcomes' }}</option>
+            <option value="preserve">Preserve edits in all listed review files</option>
+            <option value="replace">Replace all {{ update.decidableFiles.length }} listed review files with update</option>
+          </select>
+        </div>
+        <details
+          v-for="group in fileGroups"
+          :key="group.disposition"
+          class="file-group"
+          :open="group.disposition !== 'unchanged'"
+        >
+          <summary>{{ group.label }} <span>{{ group.files.length }}</span></summary>
+          <ul>
+            <li
+              v-for="file in group.files"
+              :key="file.path"
+              :class="[
+                'file-row',
+                file.disposition,
+                { current: file.path === update.selectedPath, taken: takesUpdate(file.path), applied },
+              ]"
             >
-              <span class="path" :title="file.path">{{ file.path }}</span>
-              <span class="tag">{{ outcomeFor(file) }}</span>
-            </button>
-          </li>
-        </ul>
+              <button
+                type="button"
+                class="file"
+              :disabled="update.loading.compare"
+                :data-path="file.path"
+                :aria-current="file.path === update.selectedPath ? 'true' : undefined"
+                @click="update.openFile(file.path)"
+              >
+                <span class="path" :title="file.path">{{ file.path }}</span>
+                <span v-if="file.disposition !== 'review' || applied" class="tag">{{ outcomeFor(file) }}</span>
+              </button>
+              <select
+                v-if="!applied && file.disposition === 'review'"
+                class="file-outcome"
+                :aria-label="`Outcome for ${file.path}`"
+                :value="pendingChoice(file.path) ? '' : takesUpdate(file.path) ? 'replace' : 'preserve'"
+                :disabled="!update.canEditChoices"
+                @change="chooseOutcome(file.path, $event)"
+              >
+                <option v-if="pendingChoice(file.path)" disabled value="">Choose outcome…</option>
+                <option value="preserve">{{ preserveLabel(file) }}</option>
+                <option value="replace">Replace with update</option>
+              </select>
+            </li>
+          </ul>
+        </details>
         <p v-if="update.preview.omittedFileCount > 0" class="note">
           {{ update.preview.omittedFileCount }} more files are not listed. The update still applies
           to them.
@@ -526,6 +597,12 @@ const summaryLine = computed(() => {
           <div>
             <h2>{{ selected.path }}</h2>
             <p class="muted">{{ outcomeFor(selected) }}</p>
+            <p v-if="pendingChoice(selected.path)" class="choice-required">This file cannot be merged. Choose whether to keep your installed file or replace it.</p>
+            <Disclosure v-else-if="selected.disposition === 'review' && !applied" class="decision-help" label="How this was decided">
+              <p v-if="takesUpdate(selected.path)">The package replaces this entire file, including your edits.</p>
+              <p v-else-if="selected.blockCount > 0 || selected.mergedByKey">Your changed {{ selected.mergedByKey ? 'values' : 'lines' }} stay. Other changes come from the update.</p>
+              <p v-else>Your installed file stays exactly as it is. Changes from the package are not applied to this file.</p>
+            </Disclosure>
           </div>
         </header>
         <p v-if="update.loading.diff" class="muted pad">Loading…</p>
@@ -551,12 +628,7 @@ const summaryLine = computed(() => {
             {{ undisplayedChanges }} more changes in this file are past the end of this view. They
             follow the same answer as the rest of the file.
           </p>
-          <p v-if="!applied" class="legend">
-            This is what differs. Tick the file on the left to take the update's version of it
-            whole; left unticked, it is merged and the lines you wrote stay yours.
-          </p>
-          <!-- There are no ticks any more, so the instruction to tick would be describing a
-               choice the operator no longer has. -->
+          <p v-if="!applied" class="legend">− Installed · + Update · Dimmed changes are not applied.</p>
           <p v-else class="legend">This is what the update did to this file.</p>
         </template>
         <template v-else-if="selected && keptKeys !== undefined">
@@ -589,13 +661,30 @@ const summaryLine = computed(() => {
       </article>
     </div>
 
+    <ActionBar v-if="!update.preview" class="setup-actions">
+        <p class="setup-status" role="status">{{ setupStatus }}</p>
+        <p class="setup-assurance">Nothing is written until you review and confirm the update. Every replaced file is backed up first.</p>
+      <template #actions>
+      <button
+        type="button"
+        class="primary compare"
+        :disabled="!update.canCompare"
+        @click="update.compare()"
+      >
+        {{ update.loading.compare ? 'Comparing…' : 'Compare' }}
+      </button>
+      </template>
+    </ActionBar>
+
     <!-- The button, until it has been pressed. -->
-    <footer v-if="update.preview" class="actions">
+    <ActionBar v-if="update.preview" class="actions">
       <p v-if="sameVersion !== undefined && !applied" class="caution">
         This package declares version {{ sameVersion }}, the one already installed. If you meant
         to move to a newer version, check which file you chose.
       </p>
       <p class="summary">{{ summaryLine }}</p>
+      <p v-if="!applied && update.pendingWholeFiles.length > 0" class="choice-required">Choose an outcome for {{ update.pendingWholeFiles.length }} {{ update.pendingWholeFiles.length === 1 ? 'file' : 'files' }} to continue.</p>
+      <template #actions>
       <template v-if="applied">
         <button type="button" :disabled="!update.canCompare" @click="update.compare()">
           {{ update.loading.compare ? 'Comparing…' : 'Compare again' }}
@@ -611,15 +700,13 @@ const summaryLine = computed(() => {
           :disabled="!update.canApply"
           @click="update.requestApply()"
         >
-          {{ applyLabel }}
+          {{ update.loading.apply ? 'Updating…' : 'Review update' }}
         </button>
       </template>
-    </footer>
+      </template>
+    </ActionBar>
 
-    <!--
-      Every file starts ticked, so an operator can reach the update without having read the list.
-      What they are handing over is named back to them before anything is written.
-    -->
+    <!-- Review the complete outcome and name editable files being replaced before any write. -->
     <div
       v-if="update.confirming"
       ref="confirmation"
@@ -630,16 +717,18 @@ const summaryLine = computed(() => {
       @keydown="confirmationKey"
     >
       <article class="confirm">
-        <h2 id="confirm-heading">
+        <h2 id="confirm-heading">Apply update to {{ update.preview?.resource }}?</h2>
+        <p>{{ summaryLine }}</p>
+        <p v-if="update.filesHandedOver.length > 0">
           {{ update.filesHandedOver.length }}
           {{ update.filesHandedOver.length === 1 ? 'file takes' : 'files take' }} the update's
           version
-        </h2>
-        <p>
-          What you have in {{ update.filesHandedOver.length === 1 ? 'this file' : 'these files' }}
-          is replaced by what the package ships. Untick one to keep your own lines in it instead.
         </p>
-        <ul class="confirm-files">
+        <p v-if="update.filesHandedOver.length > 0">
+          What you have in {{ update.filesHandedOver.length === 1 ? 'this file' : 'these files' }}
+          is replaced by what the package ships. Go back and change its outcome to preserve your edits.
+        </p>
+        <ul v-if="update.filesHandedOver.length > 0" class="confirm-files">
           <li v-for="file in update.filesHandedOver" :key="file.path">{{ file.path }}</li>
         </ul>
         <p class="muted">
@@ -665,6 +754,146 @@ const summaryLine = computed(() => {
   background: var(--background);
 }
 
+.is-setup {
+  overflow-y: auto;
+}
+
+.is-setup > * {
+  flex-shrink: 0;
+}
+
+.setup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-24);
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-20) var(--space-24);
+}
+
+.setup-header h1 {
+  margin: 0;
+  font-size: var(--text-page-title);
+  line-height: 1.2;
+}
+
+.setup-header p {
+  margin: var(--space-8) 0 0;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.setup-header .button-link {
+  flex: none;
+  font-size: 0.84rem;
+}
+
+.source-copy {
+  display: grid;
+  gap: var(--space-8);
+  min-width: 0;
+}
+
+.setup-sources.sources {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  width: min(880px, calc(100% - 48px));
+  margin: var(--space-24) auto 0;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.setup-sources .source {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 40%);
+  gap: var(--space-24);
+  align-items: center;
+  padding: var(--space-20) 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  opacity: 1;
+}
+
+.setup-sources .step {
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.source-hint {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.setup-sources .value {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-12);
+  background: var(--surface);
+  font-size: 0.84rem;
+  font-weight: 500;
+}
+
+.setup-sources .source:disabled .value {
+  opacity: 0.5;
+}
+
+.setup-sources .source:not(:disabled):hover .value {
+  background: var(--surface-raised);
+}
+
+.setup-note {
+  flex: 1 0 auto;
+  width: min(880px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: var(--space-20) 0 var(--space-32);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.setup-note summary {
+  width: fit-content;
+}
+
+.setup-note p {
+  max-width: 68ch;
+  margin: var(--space-12) 0 0;
+  line-height: 1.6;
+}
+
+.setup-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+}
+
+.setup-status {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+.setup-assurance {
+  max-width: 72ch;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.setup-actions .compare {
+  flex: none;
+  min-width: 110px;
+}
+
 .sources {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
@@ -672,6 +901,85 @@ const summaryLine = computed(() => {
   align-items: stretch;
   border-bottom: 1px solid var(--border);
   padding: var(--space-12) var(--space-16);
+}
+
+.source-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-16);
+  padding: var(--space-12) var(--space-16);
+  border-bottom: 1px solid var(--border);
+}
+
+.source-summary .versions {
+  margin-left: var(--space-12);
+}
+
+.source-summary p {
+  margin-top: var(--space-4);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.source-summary button {
+  flex: none;
+}
+
+summary {
+  cursor: pointer;
+}
+
+summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.source-details > summary {
+  padding: var(--space-8) var(--space-16);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.file-group > summary {
+  padding: var(--space-12) var(--space-16) var(--space-8);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 620;
+}
+
+.file-group > summary span {
+  margin-left: var(--space-8);
+  font-variant-numeric: tabular-nums;
+}
+
+.take-all select,
+.file-outcome {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  color: var(--text);
+  background: var(--surface);
+  font-size: var(--text-code);
+}
+
+.file-outcome {
+  width: calc(100% - 32px);
+  margin: 0 var(--space-16) var(--space-12);
+}
+
+.decision-help {
+  margin-top: var(--space-8);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  max-width: 65ch;
+}
+
+.decision-help p {
+  margin: var(--space-8) 0 0;
+  line-height: 1.5;
 }
 
 .source {
@@ -712,7 +1020,13 @@ const summaryLine = computed(() => {
 }
 
 .source.chosen {
-  border-color: var(--accent);
+  border-color: var(--control-border);
+}
+
+.setup-sources .source.optional,
+.setup-sources .source:disabled {
+  border-style: solid;
+  opacity: 1;
 }
 
 .step {
@@ -738,7 +1052,8 @@ const summaryLine = computed(() => {
   font-weight: 640;
 }
 
-.banner {
+.banner.baseline,
+.banner.blocked {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -783,17 +1098,6 @@ const summaryLine = computed(() => {
   flex: none;
 }
 
-.empty {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: var(--space-8);
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-32);
-  text-align: center;
-}
-
 .panes {
   display: grid;
   /* The rail grows into the width a wide window has going spare, because what it holds — the
@@ -835,19 +1139,15 @@ const summaryLine = computed(() => {
   margin: 0;
 }
 
-/* One grid per row so every path starts at the same place whether or not the file can be
-   ticked, and the tag never pushes the path into an ellipsis before it has to. The tick column is
-   stated at a fixed width so a file that cannot be answered still lines up with one that can. */
+/* Review files have room for an explicit outcome beneath their path. */
 .file-row {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
 }
 
-/* Once the update has run there is nothing to tick, so the column that held the ticks goes with
-   them rather than leaving every row indented against an empty gutter. */
-.file-row.applied {
-  grid-template-columns: minmax(0, 1fr);
+.file-row:not(.review) .file {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .file-row.current {
@@ -865,8 +1165,9 @@ const summaryLine = computed(() => {
 /* The head of the list answers every file at once, so it sits above the list rather than in it. */
 .take-all {
   display: flex;
+  flex-direction: column;
   gap: var(--space-8);
-  align-items: center;
+  align-items: stretch;
   border-bottom: 1px solid var(--border);
   padding: var(--space-8) var(--space-16);
   color: var(--text-muted);
@@ -874,16 +1175,9 @@ const summaryLine = computed(() => {
   cursor: pointer;
 }
 
-.take-all input {
-  width: 13px;
-  height: 13px;
-  margin: 0;
-  accent-color: var(--accent);
-}
-
 .file {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-8);
   align-items: baseline;
   min-width: 0;
@@ -898,7 +1192,7 @@ const summaryLine = computed(() => {
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 0.84rem;
+  font-size: var(--text-code);
   text-overflow: ellipsis;
   white-space: nowrap;
   /* Ellipsis at the front, so a path that does not fit loses its directories and keeps its file
@@ -917,7 +1211,7 @@ const summaryLine = computed(() => {
   overflow: hidden;
   min-width: 0;
   color: var(--text-muted);
-  font-size: 0.74rem;
+  font-size: var(--text-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -928,8 +1222,17 @@ const summaryLine = computed(() => {
 
 .file-row.take_from_update .tag,
 .file-row.taken .tag {
-  color: var(--accent);
+  color: var(--from-update);
 }
+
+.pending-count,
+.choice-required {
+  color: var(--warning);
+  font-size: var(--text-caption);
+  line-height: 1.5;
+}
+
+.choice-required { margin: var(--space-8) 0 0; }
 
 .diff {
   display: flex;
@@ -1028,7 +1331,7 @@ const summaryLine = computed(() => {
   align-items: center;
   padding-right: var(--space-16);
   font-family: var(--font-mono);
-  font-size: 0.84rem;
+  font-size: var(--text-code);
   line-height: 1.7;
   white-space: pre;
 }
@@ -1045,19 +1348,6 @@ const summaryLine = computed(() => {
 .marker {
   color: var(--text-muted);
   text-align: center;
-}
-
-.tick {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.tick input {
-  width: 13px;
-  height: 13px;
-  margin: 0;
-  accent-color: var(--accent);
 }
 
 /* What your file has, and what the update has instead. A side that is not what the file will end

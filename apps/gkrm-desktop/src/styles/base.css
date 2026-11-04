@@ -16,19 +16,34 @@ body {
     sans-serif;
 }
 
+body { font-size: var(--text-body); }
+
 button,
 input,
 select {
   font: inherit;
 }
 
+select { min-height: var(--control-height); }
+
 button {
+  min-height: var(--control-height);
   border: 1px solid var(--control-border);
   border-radius: var(--radius-md);
   color: var(--text);
   background: var(--surface-raised);
   padding: var(--space-8) var(--space-12);
   cursor: pointer;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  button, a, select {
+    transition: background-color var(--motion-fast), border-color var(--motion-fast);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; }
 }
 
 button:disabled {

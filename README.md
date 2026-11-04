@@ -2,7 +2,7 @@
 
 **Update a FiveM resource without losing the work you did to it.**
 
-![The comparison screen: two files kept, the rest taken from the update](docs/images/kept.png)
+![The comparison screen: two files merged with local edits preserved, three taken from the update](docs/images/kept.png)
 
 ## The problem
 
@@ -42,8 +42,8 @@ the developer alone, so nobody needs to ask you about it.
 
 ## It tells you before it writes, and it can put it back
 
-Everything still ticked is named back to you before a single byte is written. Pressing Back writes
-nothing at all.
+Every editable file set to **Replace with update** is named back to you before a single byte is
+written. Pressing Back writes nothing at all.
 
 ![The confirmation, naming the file whose own content is being replaced](docs/images/confirming.png)
 
@@ -103,11 +103,16 @@ The whole update is one screen.
 2. **Choose the new package** — the `.zip` you downloaded.
 3. **Optionally choose the package it was installed from.** Skip it if you no longer have it;
    supplying it just means fewer questions.
-4. **Compare.** You get the files the update would change, with the version each side declares.
-   Everything arrives ticked.
-5. **Untick what you want to keep** — the editable files you have changed.
-6. **Update.** Before anything is written, a confirmation names the files about to be handed
-   over. Going back from it writes nothing at all.
+4. **Compare.** Files are grouped into Review, From update, Only installed and Unchanged, with
+   the version each side declares. Source details collapse to leave room for the comparison;
+   **Change sources** opens them again.
+5. **Choose each review file's outcome.** Mergeable files start at **Merge · preserve my edits**:
+   keep your changed lines or values while taking other changes from the update. Files that cannot
+   be merged require an explicit choice: **Keep installed file** or **Replace with update**.
+   Use the bulk menu to change all listed review files, or the arrow keys to move through the
+   visible file list without changing any decisions.
+6. **Review update**, then **Apply update**. Before anything is written, a confirmation summarizes
+   the outcome and names the editable files about to be replaced. Going back writes nothing.
 
 If the installation already matches the package, the screen says *Already up to date* and offers
 no buttons.

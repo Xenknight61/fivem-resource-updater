@@ -30,6 +30,9 @@ const invoke = vi.hoisted(() => vi.fn(async (command: string) => {
       manualAttention: false, unsupportedEvidence: false,
     }
   }
+  if (command === 'update_history_list') {
+    return { entries: [] }
+  }
   if (command === 'select_installed_root') {
     return {
       cancelled: false,

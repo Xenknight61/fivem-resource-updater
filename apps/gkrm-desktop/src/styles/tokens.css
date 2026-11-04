@@ -18,10 +18,14 @@
   --focus: #77e6a8;
   /* Text on a filled accent surface. Written out in two views before it had a name. */
   --on-accent: #06120c;
-  /* Content the customer owns. Kept off the green ramp on purpose: the accent already means
-     "official/vendor", so reusing it would make an operator's own preserved edits compete
-     visually with the vendor content they are being protected from. */
+  /* Provenance is independent of the action accent and of success or warning states. */
   --yours: #6ba7ff;
+  --from-update: #b8c4df;
+  --text-body: 0.875rem;
+  --text-caption: 0.75rem;
+  --text-code: 0.8125rem;
+  --control-height: 34px;
+  --motion-fast: 120ms;
   --font-mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, "Liberation Mono",
     monospace;
   --space-4: 4px;

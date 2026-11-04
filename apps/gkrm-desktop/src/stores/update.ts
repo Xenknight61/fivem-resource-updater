@@ -21,11 +21,8 @@ import type {
 } from '@/types/commands'
 
 /**
- * The two-way update, as the operator meets it: pick the installed resource, pick the new package,
- * look at what would change, tick the files the update may have, and press Update.
- *
- * This store deliberately holds no three-way state. There is no baseline, no second package, and
- * no decision document — the whole question is which files the update may have.
+ * A read-only comparison followed by explicit file outcomes and a confirmed update.
+ * Preserve local edits by default; whole-file alternatives require an explicit answer.
  */
 interface UpdateState {
   folder: SelectionSummary | undefined
@@ -55,6 +52,7 @@ interface UpdateState {
    * keeps the operator's own lines and lets in what the update adds beside them.
    */
   choices: Record<string, boolean[]>
+  reviewedWholeFiles: string[]
   outcome: string | undefined
   /**
    * What the apply was asked to do, kept so the screen can say what happened.
@@ -65,12 +63,8 @@ interface UpdateState {
    */
   applied: { sweep: boolean; fromUpdate: number; merged: number } | undefined
   /**
-   * Whether the operator is being asked to confirm handing files to the update.
-   *
-   * Every file starts handed over, so pressing Update without reading the list is the ordinary
-   * way to arrive here — and that must not be the way an operator's own work goes quietly. The
-   * files are named back to them before anything is written. Handing over nothing needs no
-   * confirming: there is nothing of theirs to replace.
+   * Whether the operator is reviewing the final outcome before any files are written.
+   * Editable files being replaced are named individually in this review.
    */
   confirming: boolean
   /**
@@ -102,6 +96,7 @@ function initialState(): UpdateState {
     selectedPath: undefined,
     diff: undefined,
     choices: {},
+    reviewedWholeFiles: [],
     outcome: undefined,
     applied: undefined,
     confirming: false,
@@ -115,6 +110,15 @@ function initialState(): UpdateState {
       diff: false,
       apply: false,
     },
+  }
+}
+
+async function releasePreview(handle: string | undefined) {
+  if (handle === undefined) return
+  try {
+    await updateTwoWayRelease({ handle })
+  } catch {
+    // The backend record is dropped with the session if it cannot be released now.
   }
 }
 
@@ -154,9 +158,14 @@ export const useUpdateStore = defineStore('update', {
     canChooseSources(state): boolean {
       return !state.loading.compare && !state.loading.apply && !useRecoveryStore().durableOperationInProgress
     },
-    canApply(state): boolean {
-      return state.preview !== undefined && !state.loading.apply && state.outcome === undefined &&
+    canEditChoices(state): boolean {
+      return state.preview !== undefined && !state.loading.apply && !state.loading.compare && state.outcome === undefined &&
+        !state.confirming &&
         !useRecoveryStore().durableOperationInProgress
+    },
+    canApply(state): boolean {
+      return state.preview !== undefined && !state.loading.apply && !state.loading.compare && state.outcome === undefined &&
+        !useRecoveryStore().durableOperationInProgress && this.pendingWholeFiles.length === 0
     },
     /** Files worth showing: everything the update would touch, quietest last. */
     changedFiles(state): TwoWayFile[] {
@@ -250,6 +259,10 @@ export const useUpdateStore = defineStore('update', {
           file.disposition === 'review' && file.blockCount === 0 && !file.mergedByKey,
       )
     },
+    /** No merge is available: the operator must explicitly keep or replace the whole file. */
+    pendingWholeFiles(): TwoWayFile[] {
+      return this.wholeFileAnswers.filter((file) => !this.reviewedWholeFiles.includes(file.path))
+    },
     /**
      * The files whose own content the update would replace, named so they can be read back.
      *
@@ -329,33 +342,26 @@ export const useUpdateStore = defineStore('update', {
       const installedSelectionHandle = this.folder.handle
       const packageSelectionHandle = this.package.handle
       const baselineSelectionHandle = this.baseline?.handle
-      // Deciding to keep a file is the operator's, and comparing again does not unmake it.
-      // Re-ticking everything turned "keep mine" back into "hand it over" under the very button
-      // they had just pressed — after an update the primary button becomes Compare again in the
-      // same place — leaving only the confirmation between a second press and the edits they
-      // had just protected. The decisions are carried across instead.
-      const kept = this.decidableFiles
-        .filter((file: TwoWayFile) => this.choices[file.path] === undefined)
-        .map((file: TwoWayFile) => file.path)
+      const previousPath = this.selectedPath
       try {
-        await this.discardPreview()
-        this.preview = await updateTwoWayPreview({
+        // Keep the current screen visible, but inactive, while the replacement is prepared.
+        await releasePreview(this.preview?.handle)
+        const preview = await updateTwoWayPreview({
           installedSelectionHandle,
           packageSelectionHandle,
           ...(baselineSelectionHandle === undefined ? {} : { baselineSelectionHandle }),
         })
-        // Every file starts handed to the update, so the plain answer to "I want the new
-        // version" is to press Update. Untick the ones whose edits are worth keeping. Nothing is
-        // lost quietly for it: handing over a file the operator has edited is confirmed before
-        // anything is written, and named file by file.
-        this.setEveryFileChoice(true)
-        // Only a file this comparison still asks about can carry an answer. `setFileChoice`
-        // refuses every other path, so a file that is gone, or that the update no longer offers
-        // a decision on, starts from the default rather than from a stale answer.
-        for (const path of kept) this.setFileChoice(path, false)
-        const first = this.preview.files.find((file) => file.disposition === 'review')
+        this.clearPreview()
+        this.preview = preview
+        // A new preview is new evidence. Do not carry destructive replacement choices over to it.
+        // No choices means the core's preserve-local-edits behavior, never a frontend merge.
+        const first = this.changedFiles.find((file) => file.path === previousPath)
+          ?? this.preview.files.find((file) => file.disposition === 'review')
+          ?? this.changedFiles[0]
         if (first !== undefined) await this.openFile(first.path)
       } catch (error) {
+        // The previous backend handle was released. Its visible result cannot be applied again.
+        this.clearPreview()
         const failure = asDesktopError(error)
         // "Recovery is required" is not something the operator can act on from an error banner,
         // and reporting it twice — once raw, once explained — is worse than once. Find out
@@ -368,6 +374,11 @@ export const useUpdateStore = defineStore('update', {
       } finally {
         this.loading.compare = false
       }
+    },
+    async changeSources() {
+      if (!this.canChooseSources) return
+      this.error = undefined
+      await this.discardPreview()
     },
     /** Ask the workspace whether an earlier update is still on record. */
     async checkPreviousUpdate() {
@@ -404,7 +415,7 @@ export const useUpdateStore = defineStore('update', {
       }
     },
     async openFile(path: string) {
-      if (this.preview === undefined || this.loading.diff) return
+      if (this.preview === undefined) return
       this.selectedPath = path
       this.diff = undefined
       this.loading.diff = true
@@ -418,9 +429,11 @@ export const useUpdateStore = defineStore('update', {
         // diff can never quietly commit the operator to anything.
         this.diff = diff
       } catch (error) {
-        this.error = asDesktopError(error)
+        if (this.selectedPath === path && this.preview?.handle === handle) {
+          this.error = asDesktopError(error)
+        }
       } finally {
-        this.loading.diff = false
+        if (this.selectedPath === path && this.preview?.handle === handle) this.loading.diff = false
       }
     },
     /**
@@ -431,9 +444,12 @@ export const useUpdateStore = defineStore('update', {
      * should not have to walk through the two dozen they never touched.
      */
     setFileChoice(path: string, take: boolean) {
-      if (this.outcome !== undefined) return
+      if (!this.canEditChoices) return
       const file = this.preview?.files.find((candidate) => candidate.path === path)
       if (file === undefined || file.disposition !== 'review') return
+      if (file.blockCount === 0 && !file.mergedByKey && !this.reviewedWholeFiles.includes(path)) {
+        this.reviewedWholeFiles.push(path)
+      }
       if (take) {
         this.choices[path] = new Array<boolean>(file.blockCount).fill(true)
         return
@@ -454,20 +470,11 @@ export const useUpdateStore = defineStore('update', {
      * given it some or none, the rest are merged and the lines they wrote stay theirs.
      */
     /**
-     * What the Update button does: ask first when the operator's own files are being handed over.
-     *
-     * Every file starts handed over, so an operator who never opened the list arrives here having
-     * chosen nothing — and that is exactly when their work would go without their having said so.
-     * Handing over nothing goes straight through: there is nothing of theirs to replace, and an
-     * update that keeps all of it has nothing to warn about.
+     * Review every proposed update before writing, including updates that preserve all edits.
      */
     async requestApply() {
       if (!this.canApply) return
-      if (this.hasOwnChoices) {
-        this.confirming = true
-        return
-      }
-      await this.apply()
+      this.confirming = true
     },
     /** Back to the list, nothing written. */
     cancelApply() {
@@ -519,6 +526,7 @@ export const useUpdateStore = defineStore('update', {
           this.diff = undefined
           this.selectedPath = undefined
           this.choices = {}
+          this.reviewedWholeFiles = []
         }
         await recovery.finishDurableOperation(generation, {
           responseReceived, error: this.error, retirement: undefined,
@@ -527,22 +535,23 @@ export const useUpdateStore = defineStore('update', {
         this.loading.apply = false
       }
     },
-    /** Release the backend's held preview. A failure here is not the operator's problem. */
-    async discardPreview() {
-      const handle = this.preview?.handle
+    /** Reset comparison state synchronously so replacement previews can be swapped atomically. */
+    clearPreview() {
       this.preview = undefined
       this.selectedPath = undefined
       this.diff = undefined
+      this.loading.diff = false
       this.choices = {}
+      this.reviewedWholeFiles = []
       this.outcome = undefined
       this.applied = undefined
       this.confirming = false
-      if (handle === undefined) return
-      try {
-        await updateTwoWayRelease({ handle })
-      } catch {
-        // The record is dropped with the session either way.
-      }
+    },
+    /** Release the backend's held preview. A failure here is not the operator's problem. */
+    async discardPreview() {
+      const handle = this.preview?.handle
+      this.clearPreview()
+      await releasePreview(handle)
     },
     dismissError() {
       this.error = undefined
