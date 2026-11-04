@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import LoadingState from '@/components/LoadingState.vue'
+import PageHeader from '@/components/PageHeader.vue'
+import StatusNotice from '@/components/StatusNotice.vue'
 import {
   asDesktopError,
   storageRelease,
@@ -49,6 +51,50 @@ const recovery = useRecoveryStore()
 const entries = ref<UpdateHistoryEntry[]>([])
 const selected = ref<string | undefined>(undefined)
 const loadingHistory = ref(false)
+const historyError = ref<string>()
+const search = ref('')
+const filteredEntries = computed(() => {
+  const query = search.value.trim().toLocaleLowerCase()
+  return entries.value.filter((entry) =>
+    `${entry.resource} ${versionMove(entry)} ${outcomeLabel[entry.outcome] ?? entry.outcome}`
+      .toLocaleLowerCase().includes(query),
+  )
+})
+
+watch(filteredEntries, (visible) => {
+  if (!visible.some((entry) => keyOf(entry) === selected.value)) {
+    selected.value = visible[0] === undefined ? undefined : keyOf(visible[0])
+    confirmingUndo.value = false
+    undone.value = undefined
+    undoError.value = undefined
+  }
+})
+
+function selectEntry(entry: UpdateHistoryEntry) {
+  if (undoing.value || recovery.durableOperationInProgress) return
+  selected.value = keyOf(entry)
+  confirmingUndo.value = false
+  undone.value = undefined
+  undoError.value = undefined
+}
+
+async function navigateHistory(event: KeyboardEvent) {
+  if (!(event.target instanceof HTMLButtonElement) || !event.target.matches('[data-history-entry]')) return
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  if (undoing.value || recovery.durableOperationInProgress) return
+  const index = filteredEntries.value.findIndex((entry) => keyOf(entry) === selected.value)
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? filteredEntries.value.length - 1
+    : Math.max(0, Math.min(filteredEntries.value.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))
+  const entry = filteredEntries.value[next]
+  if (entry === undefined) return
+  const list = event.currentTarget
+  selectEntry(entry)
+  await nextTick()
+  if (list instanceof HTMLElement) {
+    list.querySelector<HTMLButtonElement>('[aria-current="true"]')?.focus()
+  }
+}
 
 /**
  * What names one update in the list.
@@ -64,13 +110,13 @@ const selectedEntry = computed(() => entries.value.find((entry) => keyOf(entry) 
 
 async function loadHistory() {
   loadingHistory.value = true
+  historyError.value = undefined
   try {
     entries.value = (await updateHistoryList()).entries
     const first = entries.value[0]
     if (selected.value === undefined && first !== undefined) selected.value = keyOf(first)
-  } catch {
-    // The list is a convenience; the workspace state below is what actually matters.
-    entries.value = []
+  } catch (error) {
+    historyError.value = asDesktopError(error).message
   } finally {
     loadingHistory.value = false
   }
@@ -109,6 +155,7 @@ function when(entry: UpdateHistoryEntry): string {
     : date.toLocaleString('en-GB', {
         day: 'numeric',
         month: 'short',
+        year: 'numeric',
         hour: '2-digit',
         minute: '2-digit',
       })
@@ -122,6 +169,26 @@ function when(entry: UpdateHistoryEntry): string {
  * not from what was intended.
  */
 const confirmingUndo = ref(false)
+const undoPanel = ref<HTMLElement>()
+const detailPanel = ref<HTMLElement>()
+let undoTrigger: HTMLElement | undefined
+let undoEntryKey: string | undefined
+watch(confirmingUndo, async (open) => {
+  if (open) {
+    undoEntryKey = selected.value
+    undoTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+    await nextTick()
+    undoPanel.value?.querySelector<HTMLButtonElement>('[data-cancel-undo]')?.focus()
+  } else {
+    await nextTick()
+    if (selected.value === undoEntryKey) {
+      if (undoTrigger?.isConnected) undoTrigger.focus()
+      else detailPanel.value?.focus()
+    }
+    undoTrigger = undefined
+    undoEntryKey = undefined
+  }
+})
 const undoing = ref(false)
 const undone = ref<UpdateHistoryUndoResponse | undefined>(undefined)
 const undoError = ref<string | undefined>(undefined)
@@ -336,31 +403,30 @@ function keptFor(held: HeldBaseline): string {
 
 <template>
   <section class="history" aria-labelledby="history-heading">
-    <header class="page">
-      <h1 id="history-heading">History</h1>
-      <p class="lede">
-        Every update keeps its backups and its journal. Recovering and closing are always something
-        you start — nothing here happens on its own.
-      </p>
-    </header>
+    <PageHeader class="page" heading-id="history-heading" title="History" description="Review past updates, restore files, and manage what is kept.">
+      <template #actions><a class="button-link" href="#/">New update</a></template>
+    </PageHeader>
 
     <!-- The whole workspace in one line, and the one action it offers. -->
-    <div :class="['state', state.tone]" role="status">
-      <span>{{ state.text }}</span>
-      <span class="state-actions">
+    <StatusNotice class="state" :tone="state.tone === 'danger' ? 'warning' : state.tone === 'warning' ? 'warning' : 'neutral'">
+      <div class="workspace-state">
+        <span class="state-label">Workspace</span>
+        <span>{{ state.text }}</span>
+      </div>
+      <template #actions>
         <button
           v-if="recovery.canFinalizeTerminal"
           type="button"
           class="primary"
           @click="recovery.finalizeTerminal(true)"
         >
-          Close it
+          Close previous update
         </button>
         <button type="button" :disabled="busy" @click="recovery.refreshOverview()">
           {{ busy ? 'Checking…' : 'Check again' }}
         </button>
-      </span>
-    </div>
+      </template>
+    </StatusNotice>
     <p v-if="recovery.canFinalizeTerminal" class="hint">
       Closing it lets the next update start. Its backups and journal are kept either way.
     </p>
@@ -370,21 +436,43 @@ function keptFor(held: HeldBaseline): string {
 
     <div class="panes">
       <!-- What you have already done. No folder to point at: the app did these. -->
-      <nav class="past" aria-label="Updates you have run">
-        <p class="rail-title">Your updates</p>
+      <nav class="past" aria-label="Updates you have run" @keydown="navigateHistory">
+        <div class="list-toolbar">
+          <p class="rail-title">Your updates <span>{{ entries.length }}</span></p>
+          <label class="search-label" for="history-search">Find an update</label>
+          <input
+            id="history-search"
+            v-model="search"
+            type="search"
+            placeholder="Resource, version, or outcome…"
+            :disabled="undoing || recovery.durableOperationInProgress"
+          />
+        </div>
         <LoadingState v-if="loadingHistory" label="Reading your updates" />
+        <div v-else-if="historyError" class="history-error pad" role="alert">
+          <p class="hint danger">Could not read your updates. {{ historyError }}</p>
+          <button type="button" @click="loadHistory()">Try again</button>
+        </div>
         <p v-else-if="entries.length === 0" class="hint pad">
-          Nothing yet. Updates you run appear here.
+          Nothing yet. Updates you run appear here. <a class="text-link" href="#/">Start an update</a>
+        </p>
+        <p v-else-if="filteredEntries.length === 0" class="hint pad" role="status">
+          No updates match “{{ search }}”. Try another resource, version, or outcome.
         </p>
         <ul v-else>
-          <li v-for="entry in entries" :key="keyOf(entry)">
+          <li v-for="entry in filteredEntries" :key="keyOf(entry)">
             <button
               type="button"
+              data-history-entry
               :class="{ current: keyOf(entry) === selected }"
               :aria-current="keyOf(entry) === selected ? 'true' : undefined"
-              @click="selected = keyOf(entry); confirmingUndo = false; undone = undefined"
+              :disabled="undoing || recovery.durableOperationInProgress"
+              @click="selectEntry(entry)"
             >
               <span class="name">{{ entry.resource }}</span>
+              <span :class="['entry-outcome', { attention: entry.outcome === 'recovery_required' }]">
+                {{ outcomeLabel[entry.outcome] ?? entry.outcome }}
+              </span>
               <span class="meta">
                 <template v-if="versionMove(entry)">{{ versionMove(entry) }} · </template
                 >{{ when(entry) }}
@@ -394,50 +482,7 @@ function keptFor(held: HeldBaseline): string {
         </ul>
       </nav>
 
-      <article class="detail">
-        <template v-if="selectedEntry">
-          <h2>{{ selectedEntry.resource }}</h2>
-          <p v-if="versionMove(selectedEntry)" class="versions">
-            {{ versionMove(selectedEntry) }}
-          </p>
-          <p class="hint">
-            {{ outcomeLabel[selectedEntry.outcome] ?? selectedEntry.outcome }} ·
-            {{ when(selectedEntry) }} · {{ selectedEntry.total }} files ·
-            {{ selectedEntry.reviewed }} you decided · {{ selectedEntry.replaced }} replaced
-          </p>
-
-          <!-- Putting it back writes to the live installation, so it asks before it does. -->
-          <div v-if="selectedEntry.undoable" class="undo">
-            <template v-if="!confirmingUndo">
-              <button type="button" :disabled="!canUndo" @click="askToUndo()">Undo this update</button>
-              <p class="hint">
-                Puts every file this update replaced back exactly as it was. Files you have changed
-                since are left alone.
-              </p>
-            </template>
-            <template v-else>
-              <p class="hint warn">
-                This writes to {{ selectedEntry.resource }} in the folder you updated. Files you
-                have edited since this update are left as you left them.
-              </p>
-              <div class="undo-actions">
-                <button type="button" class="primary" :disabled="undoing || !canUndo" @click="confirmUndo()">
-                  {{ undoing ? 'Putting it back…' : 'Yes, put it back' }}
-                </button>
-                <button type="button" :disabled="undoing" @click="confirmingUndo = false">
-                  Cancel
-                </button>
-              </div>
-            </template>
-          </div>
-          <p v-else-if="selectedEntry.outcome === 'committed'" class="hint">
-            This one cannot be put back: there is no record of what it replaced.
-          </p>
-          <p v-if="undoneSummary" class="hint ok" role="status">{{ undoneSummary }}</p>
-          <p v-if="undoError" class="hint danger" role="alert">{{ undoError }}</p>
-        </template>
-        <p v-else class="hint">Choose an update on the left to see what it did.</p>
-
+      <article ref="detailPanel" class="detail" tabindex="-1" aria-label="Update details">
         <!-- Recovery is the one thing that needs the folder: it writes to the live installation
              and has to bind to it at the moment it runs. It appears only when there is something
              to recover. -->
@@ -446,6 +491,7 @@ function keptFor(held: HeldBaseline): string {
           class="recover"
           aria-labelledby="recover-heading"
         >
+          <p class="section-label">Needs attention</p>
           <h3 id="recover-heading">Recover an unfinished update</h3>
           <p class="hint">
             Point at the folder that holds your resource directories, then the resource inside it.
@@ -471,7 +517,7 @@ function keptFor(held: HeldBaseline): string {
               {{ scan.loading.scanInstalledRoot ? 'Reading…' : 'Read folder' }}
             </button>
             <button type="button" class="primary" :disabled="!canInspect" @click="inspect()">
-              {{ recovery.recoveryHandle === undefined ? 'Look' : 'Look again' }}
+              {{ recovery.recoveryHandle === undefined ? 'Inspect resource' : 'Inspect again' }}
             </button>
           </div>
 
@@ -515,6 +561,69 @@ function keptFor(held: HeldBaseline): string {
             </li>
           </ul>
         </section>
+        <template v-if="selectedEntry">
+          <header class="detail-header">
+            <p class="section-label">Update details</p>
+            <h2>{{ selectedEntry.resource }}</h2>
+            <p v-if="versionMove(selectedEntry)" class="versions">{{ versionMove(selectedEntry) }}</p>
+            <p class="hint">{{ when(selectedEntry) }}</p>
+            <span :class="['result-label', { attention: selectedEntry.outcome === 'recovery_required' }]">
+              {{ outcomeLabel[selectedEntry.outcome] ?? selectedEntry.outcome }}
+            </span>
+          </header>
+          <dl class="update-facts" aria-label="Files in this update">
+            <div><dt>Total files</dt><dd>{{ selectedEntry.total }}</dd></div>
+            <div><dt>You decided</dt><dd>{{ selectedEntry.reviewed }}</dd></div>
+            <div><dt>Replaced</dt><dd>{{ selectedEntry.replaced }}</dd></div>
+          </dl>
+
+          <!-- Putting it back writes to the live installation, so it asks before it does. -->
+          <div v-if="selectedEntry.undoable" class="undo">
+            <h3>Restore the previous files</h3>
+            <template v-if="!confirmingUndo">
+              <p class="hint">
+                Puts every file this update replaced back exactly as it was. Files you have changed
+                since are left alone.
+              </p>
+              <button type="button" :disabled="!canUndo" @click="askToUndo()">Undo this update</button>
+              <p v-if="!canUndo" class="hint">Resolve the workspace state above before restoring files.</p>
+            </template>
+            <div v-else ref="undoPanel" class="undo-confirm" role="group" aria-label="Confirm restoring files" @keydown.esc="!undoing && (confirmingUndo = false)">
+              <p class="hint warn">
+                This writes to {{ selectedEntry.resource }} in the folder you updated. Files you
+                have edited since this update are left as you left them.
+              </p>
+              <div class="undo-actions">
+                <button type="button" data-cancel-undo :disabled="undoing" @click="confirmingUndo = false">
+                  Cancel
+                </button>
+                <button type="button" class="primary" :disabled="undoing || !canUndo" @click="confirmUndo()">
+                  {{ undoing ? 'Putting it back…' : 'Yes, put it back' }}
+                </button>
+              </div>
+            </div>
+          </div>
+          <p v-else-if="selectedEntry.outcome === 'committed'" class="hint">
+            This one cannot be put back: there is no record of what it replaced.
+          </p>
+          <p v-if="undoneSummary" class="hint ok" role="status">{{ undoneSummary }}</p>
+          <p v-if="undoError" class="hint danger" role="alert">{{ undoError }}</p>
+        </template>
+        <div v-else class="detail-empty">
+          <template v-if="historyError">
+            <h2>History is unavailable</h2>
+            <p class="hint">Try reading your updates again using the button in the list.</p>
+          </template>
+          <template v-else-if="loadingHistory">
+            <h2>Reading your updates…</h2>
+          </template>
+          <template v-else>
+            <h2>{{ entries.length === 0 ? 'Your update history starts here' : 'Choose an update' }}</h2>
+            <p class="hint">{{ entries.length === 0 ? 'After your first update, its result and available backups appear here.' : 'Select an update from the list to see its result and restoration options.' }}</p>
+          </template>
+        </div>
+
+
       </article>
     </div>
 
@@ -525,13 +634,16 @@ function keptFor(held: HeldBaseline): string {
     -->
     <div v-if="storage && totalHeld > 0" class="kept">
       <div class="kept-line">
-        <span>
+        <div>
+          <h2>Local storage</h2>
+        <span class="storage-summary">
           <strong>{{ megabytes(totalHeld) }}</strong> left behind by past updates —
           <template v-if="totalReleasable > 0">
             {{ megabytes(totalReleasable) }} of it is no longer needed.
           </template>
           <template v-else>all of it is still in use.</template>
         </span>
+        </div>
         <span class="kept-actions">
           <span v-if="released" class="done" role="status">
             Released {{ megabytes(released.bytes) }}.
@@ -581,330 +693,315 @@ function keptFor(held: HeldBaseline): string {
 </template>
 
 <style scoped>
-.undo {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-8);
-  margin-top: var(--space-12);
-  padding-top: var(--space-12);
-  border-top: 1px solid var(--border);
-}
-
-/* Sized by its label, like every other button on this screen. Stretched across the pane it read
-   as a banner rather than as the one consequential thing here, and it was the only button in the
-   product that did. The hint below it still takes the full width, because that is prose. */
-.undo > button {
-  align-self: start;
-}
-
-.undo-actions {
-  display: flex;
-  gap: var(--space-8);
-}
-
-.hint.warn {
-  color: var(--warning);
-}
-
-/* The palette's own green for "this went well". `--ok` was never a token, so this rendered a
-   second, slightly different green that nothing else in the product uses. */
-.hint.ok {
-  color: var(--success);
-}
-
-/*
- * A column that scrolls, rather than a grid that apportions rows.
- *
- * As a grid the sections were rows sized against a container with a height of its own, and a row
- * could come out shorter than the section in it — which does not clip, it draws over whatever
- * follows. The kept-packages line was painted across the list of updates. Here each section keeps
- * its own content height and the page scrolls past them, which is the behaviour that was always
- * meant.
- */
 .history {
   display: flex;
   flex-direction: column;
-  gap: var(--space-16);
-  width: min(100%, 900px);
   flex: 1;
   min-height: 0;
   min-width: 0;
-  padding: var(--space-24);
-  margin: 0 auto;
   overflow-y: auto;
 }
 
-/* Nothing here is squeezed to make the page fit: the page scrolls instead. */
 .history > * {
   flex: none;
 }
 
-/* The one row that should grow. Without this every child is fixed, so a tall window put the
-   whole screen in its top third and left the rest blank. */
-.history > .panes {
-  flex: 1;
-}
-
-.page h1 {
-  margin: 0;
-  font-size: var(--text-page-title);
-  line-height: 1.2;
-}
-
-.lede {
-  max-width: 68ch;
-  margin: var(--space-8) 0 0;
-  color: var(--text-muted);
-  line-height: 1.55;
-}
-
-.state {
+.workspace-state {
   display: flex;
+  align-items: baseline;
   gap: var(--space-16);
-  align-items: center;
-  justify-content: space-between;
-  border: 1px solid var(--border);
-  border-left-width: 3px;
-  border-radius: var(--radius-md);
-  padding: var(--space-12) var(--space-16);
-  background: var(--surface);
-  font-weight: 600;
 }
 
-.state.ok {
-  border-left-color: var(--success);
-}
-
-.state.warning {
-  border-left-color: var(--warning);
-}
-
-.state.danger {
-  border-left-color: var(--danger);
-}
-
-.state.muted {
+.state-label {
   color: var(--text-muted);
-  font-weight: 500;
+  font-size: 0.78rem;
 }
 
-.state-actions {
-  display: flex;
-  gap: var(--space-8);
-  flex: none;
+.history > .hint {
+  padding: var(--space-8) var(--space-24);
+  border-bottom: 1px solid var(--border);
+  max-width: none;
 }
 
 .hint {
   max-width: 68ch;
   margin: 0;
   color: var(--text-muted);
-  font-size: 0.86rem;
-  line-height: 1.5;
+  font-size: 0.84rem;
+  line-height: 1.6;
 }
 
 .hint.danger {
   color: var(--danger);
 }
 
-/* The two columns are separated by a rule that runs the height of the taller one, so the list
-   and what it describes read as two places rather than one wrapped paragraph. */
+.hint.warn {
+  color: var(--warning);
+}
+
+.hint.ok {
+  color: var(--success);
+}
+
 .panes {
   display: grid;
-  grid-template-columns: minmax(0, 240px) minmax(0, 1fr);
-  align-items: stretch;
-  min-height: 160px;
-  /* Bounded, so the row this occupies cannot be sized by however many updates have been run. */
+  grid-template-columns: minmax(260px, 28%) minmax(0, 1fr);
+  flex: 1 0 auto;
+  min-height: 300px;
   min-width: 0;
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-20);
-}
-
-/* Said in the same shape as the state line above it: one sentence, one action. */
-.kept {
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-16);
-  color: var(--text-muted);
-  font-size: 0.86rem;
-}
-
-.kept-line {
-  display: flex;
-  gap: var(--space-16);
-  align-items: center;
-  justify-content: space-between;
-}
-
-.kept-line strong {
-  color: var(--text);
-}
-
-.kept-actions {
-  display: flex;
-  gap: var(--space-12);
-  align-items: center;
-  flex: none;
-}
-
-.kept .done {
-  color: var(--success);
-  font-weight: 600;
-}
-
-.kept summary {
-  cursor: pointer;
-  margin-top: var(--space-8);
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
-
-.kept-list {
-  margin: var(--space-8) 0;
-  padding: 0;
-  list-style: none;
-}
-
-.kept-list li {
-  display: flex;
-  gap: var(--space-12);
-  justify-content: space-between;
-  padding: var(--space-4) 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.kept-list .name {
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
 }
 
 .past {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   border-right: 1px solid var(--border);
-  padding-right: var(--space-20);
+  background: var(--surface);
+}
+
+.list-toolbar {
+  display: grid;
+  gap: var(--space-8);
+  padding: var(--space-16);
+  border-bottom: 1px solid var(--border);
 }
 
 .rail-title {
-  margin: 0 0 var(--space-8);
-  color: var(--text-muted);
-  font-size: 0.78rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
 }
 
-/*
- * The one thing on this screen that grows without limit: an operator who has run forty updates has
- * forty rows here. Left unbounded it decided the height of the whole page, which pushed everything
- * below it — the kept-packages line included — off the end of a default-sized window.
- */
+.rail-title span {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.search-label {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+#history-search {
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-8);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-md);
+  background: var(--background);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+#history-search::placeholder {
+  color: var(--text-muted);
+}
+
+.history-error {
+  display: grid;
+  gap: var(--space-12);
+}
+
+.history-error button {
+  justify-self: start;
+}
+
 .past ul {
   display: grid;
-  gap: var(--space-4);
-  /* Takes the room the row has rather than a fixed twenty lines of it. */
-  flex: 1;
+  gap: 2px;
   align-content: start;
+  flex: 1;
   min-height: 0;
+  max-height: 60vh;
   overflow-y: auto;
-  padding: 0;
+  padding: var(--space-8);
   margin: 0;
   list-style: none;
 }
 
 .past button {
   display: grid;
-  gap: 2px;
+  gap: var(--space-4);
   width: 100%;
-  border-color: transparent;
-  padding: var(--space-8) var(--space-12);
+  min-width: 0;
+  border: 1px solid transparent;
+  padding: var(--space-12);
   background: transparent;
   text-align: left;
 }
 
-.past button.current {
-  border-color: var(--border);
-  background: var(--surface);
+.past button:hover {
+  background: var(--surface-raised);
 }
 
-.past .meta {
+.past button.current {
+  border-color: var(--border);
+  background: var(--surface-raised);
+}
+
+.past .name {
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.entry-outcome {
   color: var(--text-muted);
   font-size: 0.76rem;
 }
 
+.attention {
+  color: var(--warning);
+}
+
 .detail {
-  min-height: 0;
-  overflow-y: auto;
-  display: grid;
-  gap: var(--space-12);
-  align-content: start;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-24);
   min-width: 0;
-  padding-left: var(--space-20);
+  padding: var(--space-24) var(--space-32);
+}
+
+.detail:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.detail-header {
+  display: grid;
+  gap: var(--space-8);
+}
+
+.section-label {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.76rem;
 }
 
 .detail h2 {
   margin: 0;
   font-family: var(--font-mono);
+  font-size: 1.2rem;
+  overflow-wrap: anywhere;
+}
+
+.detail h3, .kept h2 {
+  margin: 0;
   font-size: var(--text-section);
+  font-weight: 600;
 }
 
 .versions {
   margin: 0;
-  color: var(--text);
+  color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 0.92rem;
-  font-weight: 620;
+  font-size: 0.86rem;
+}
+
+.result-label {
+  justify-self: start;
+  padding: var(--space-4) var(--space-8);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  font-size: 0.78rem;
+}
+
+.update-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-24);
+  margin: 0;
+  padding: var(--space-16) 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.update-facts div {
+  display: grid;
+  gap: var(--space-8);
+  min-width: 80px;
+}
+
+.update-facts dt {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.update-facts dd {
+  margin: 0;
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.undo {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-12);
+}
+
+.undo > button {
+  margin-top: var(--space-4);
+  font-size: 0.84rem;
+}
+
+.undo-confirm {
+  display: grid;
+  gap: var(--space-16);
+  width: 100%;
+  padding: var(--space-16);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.undo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-8);
+}
+
+.detail-empty {
+  display: grid;
+  align-content: center;
+  gap: var(--space-12);
+  min-height: 220px;
+}
+
+.detail-empty h2 {
+  font-family: inherit;
+  font-size: var(--text-section);
 }
 
 .recover {
   display: grid;
   gap: var(--space-12);
   align-content: start;
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-16);
+  padding-bottom: var(--space-24);
+  border-bottom: 1px solid var(--border);
 }
 
-.recover h3 {
-  margin: 0;
-  font-size: 0.95rem;
-}
-
-.pad {
-  padding: var(--space-8) var(--space-12);
-}
-
-@media (max-width: 900px) {
-  .panes {
-    grid-template-columns: 1fr;
-    gap: var(--space-16);
-  }
-
-  /* Stacked, the rule belongs between them rather than beside them. */
-  .past {
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-    padding-right: 0;
-    padding-bottom: var(--space-16);
-  }
-
-  .detail {
-    padding-left: 0;
-  }
-}
-
-/* The three steps read left to right in the order they are taken. */
-.steps {
+.steps, .resources {
   display: flex;
-  gap: var(--space-8);
   flex-wrap: wrap;
+  gap: var(--space-8);
 }
 
 .resources {
-  display: flex;
-  gap: var(--space-8);
-  flex-wrap: wrap;
+  list-style: none;
   padding: 0;
   margin: 0;
-  list-style: none;
 }
 
 .resources button {
@@ -913,13 +1010,15 @@ function keptFor(held: HeldBaseline): string {
 }
 
 .resources button.current {
-  border-color: var(--accent);
-  color: var(--text);
+  border-color: var(--control-border);
+  background: var(--surface-raised);
 }
 
 .found {
   margin: 0;
   color: var(--text);
+  font-size: 0.86rem;
+  line-height: 1.5;
 }
 
 .candidates {
@@ -932,18 +1031,96 @@ function keptFor(held: HeldBaseline): string {
 
 .candidates li {
   display: flex;
-  gap: var(--space-12);
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-12);
+  padding: var(--space-12);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: var(--space-12) var(--space-16);
   background: var(--surface);
 }
 
 .name {
   font-family: var(--font-mono);
   font-size: 0.86rem;
+}
+
+.kept {
+  padding: var(--space-16) var(--space-24);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.kept-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-16);
+}
+
+.kept h2 {
+  color: var(--text);
+  font-size: 0.86rem;
+  margin-bottom: var(--space-8);
+}
+
+.storage-summary {
+  line-height: 1.5;
+}
+
+.kept-line strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.kept-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-8);
+  align-items: center;
+  flex: none;
+}
+
+.kept-actions button {
+  font-size: 0.8rem;
+}
+
+.kept .done {
+  color: var(--success);
+}
+
+.kept summary {
+  cursor: pointer;
+  margin-top: var(--space-12);
+  font-size: 0.78rem;
+}
+
+.kept summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.kept-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-12) 0;
+}
+
+.kept-list li {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-8) var(--space-16);
+  padding: var(--space-8) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.kept-list .name {
+  color: var(--text);
+  font-size: 0.8rem;
 }
 
 .primary {
@@ -957,4 +1134,31 @@ function keptFor(held: HeldBaseline): string {
   border-color: var(--border);
   background: var(--surface-raised);
   color: var(--text-muted);
-}</style>
+}
+
+.pad {
+  padding: var(--space-16);
+}
+
+@media (max-width: 900px) {
+  .page {
+    padding: var(--space-16);
+  }
+  .state {
+    padding: var(--space-12) var(--space-16);
+  }
+  .workspace-state {
+    display: grid;
+    gap: var(--space-4);
+  }
+  .detail {
+    padding: var(--space-24) var(--space-20);
+  }
+  .kept {
+    padding: var(--space-16);
+  }
+  .kept-line {
+    align-items: flex-start;
+  }
+}
+</style>

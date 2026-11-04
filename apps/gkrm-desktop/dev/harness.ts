@@ -22,6 +22,7 @@ import '@/styles/base.css'
 const FOLDER = '123e4567-e89b-42d3-a456-426614174000'
 const PACKAGE = '123e4567-e89b-42d3-a456-426614174001'
 const PREVIEW = '123e4567-e89b-42d3-a456-426614174002'
+const scenario = new URLSearchParams(window.location.search).get('state') ?? 'start'
 
 const preview = {
   handle: PREVIEW,
@@ -61,6 +62,23 @@ const diff = {
     { kind: 'theirs', block: 1, text: 'Config.EnableVoiceMail = true', truncated: false },
   ],
 }
+
+const scenarioPreview = scenario === 'review-required'
+  ? {
+      ...preview,
+      files: preview.files.map((file) => file.path === 'config.lua' ? { ...file, blockCount: 0 } : file),
+      unmergeable: ['config.lua'],
+    }
+  : scenario === 'many-files'
+    ? {
+        ...preview,
+        summary: { ...preview.summary, review: 80, total: 85 },
+        files: [...preview.files, ...Array.from({ length: 78 }, (_, index) => ({
+          path: `client/modules/phone/configuration/feature-${String(index + 1).padStart(3, '0')}.lua`,
+          disposition: 'review', editable: true, untouched: false, mergedByKey: false, blockCount: 2,
+        }))],
+      }
+    : preview
 
 const clearOverview = {
   disposition: 'clear',
@@ -140,7 +158,7 @@ const answers: Record<string, unknown> = {
   session_list_selections: { selections: [] },
   session_release_selection: { released: true },
   update_recovery_overview: clearOverview,
-  update_two_way_preview: preview,
+  update_two_way_preview: scenarioPreview,
   update_two_way_get_diff: diff,
   update_two_way_apply: { outcome: 'committed', summary: preview.summary },
   update_two_way_release: { released: true },
@@ -148,7 +166,11 @@ const answers: Record<string, unknown> = {
   storage_report: storage,
 }
 
-mockIPC(async (command) => {
+mockIPC(async (command, payload) => {
+  if (scenario === 'review-required' && command === 'update_two_way_get_diff' &&
+      (payload as { request?: { path?: string } })?.request?.path === 'config.lua') {
+    return { available: false, truncated: false, omitted: false, blockCount: 0, defaultChoices: [], rows: [], wholeFileReason: 'too_far_apart' }
+  }
   const answer = answers[command]
   if (answer === undefined) {
     // Loud on purpose: a screen reaching for something the harness does not answer should be
@@ -167,7 +189,7 @@ app.mount('#app')
 
 /** Put the app into the state named by `?state=`, so each screen can be looked at directly. */
 async function arrange() {
-  const state = new URLSearchParams(window.location.search).get('state') ?? 'start'
+  const state = scenario
   await router.isReady()
 
   if (state === 'about') {
@@ -197,7 +219,7 @@ async function arrange() {
     return
   }
   if (state === 'confirming') {
-    update.setFileChoice('config.lua', false)
+    update.setFileChoice('client/custom.lua', true)
     await update.requestApply()
     return
   }

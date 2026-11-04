@@ -107,9 +107,7 @@ function button<T extends { text(): string }>(
 /**
  * Take every file back, as an operator does who wants their own work kept.
  *
- * A comparison starts with every file handed to the update, so a test about what a merge does has
- * to say so first. Written out here rather than in each test: what is being set up is the
- * operator's intent, not an implementation detail of the default.
+ * Explicitly preserve every listed file, including files that need a whole-file decision.
  */
 function keepEveryFile(store: ReturnType<typeof useUpdateStore>) {
   store.setEveryFileChoice(false)
@@ -178,6 +176,153 @@ describe('the update screen', () => {
     expect(button(wrapper, 'Compare')?.attributes('disabled')).toBeUndefined()
   })
 
+  it('explains setup progress and keeps Compare in the footer until comparison succeeds', async () => {
+    const wrapper = mount(UpdateView)
+    const store = useUpdateStore()
+    expect(wrapper.find('h1').classes()).not.toContain('sr-only')
+    expect(wrapper.findAll('.compare')).toHaveLength(1)
+    expect(wrapper.find('.setup-actions .compare').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.setup-status').text()).toContain('Choose your installed resource')
+    expect(wrapper.find('.setup-note details').attributes('open')).toBeUndefined()
+
+    await button(wrapper, 'Choose folder')?.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.setup-status').text()).toContain('Choose the new ZIP')
+    await button(wrapper, 'Choose ZIP')?.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.setup-status').text()).toContain('Ready to compare')
+    expect(wrapper.find('.setup-actions .compare').attributes('disabled')).toBeUndefined()
+    expect(store.baseline).toBeUndefined()
+    expect(invoke.mock.calls.some(([command]) => command === 'update_two_way_apply')).toBe(false)
+
+    await wrapper.find('.setup-actions .compare').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.setup-header').exists()).toBe(false)
+    expect(wrapper.find('.setup-actions').exists()).toBe(false)
+    expect(wrapper.find('.source-summary').exists()).toBe(true)
+    expect(wrapper.find('h1').classes()).toContain('sr-only')
+  })
+
+  it('groups files by review relevance and collapses source controls after comparing', async () => {
+    const wrapper = mount(UpdateView)
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    await store.compare()
+    await flushPromises()
+
+    const groups = wrapper.findAll('.file-group')
+    expect(groups.map((group) => group.find('summary').text())).toEqual([
+      'Review 2', 'From update 1', 'Only installed 1', 'Unchanged 1',
+    ])
+    expect(groups[0]?.attributes('open')).toBeDefined()
+    expect(groups[3]?.attributes('open')).toBeUndefined()
+    expect(wrapper.find('.sources').exists()).toBe(false)
+    expect(wrapper.find('.source-summary').text()).toContain('1.0.0 → 2.0.0')
+    const folder = store.folder
+    const packageSelection = store.package
+    store.setFileChoice('config.lua', true)
+    await button(wrapper, 'Change sources')?.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.sources').exists()).toBe(true)
+    expect(wrapper.find('.setup-header').exists()).toBe(true)
+    expect(wrapper.find('.setup-actions .compare').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('.panes').exists()).toBe(false)
+    expect(store.preview).toBeUndefined()
+    expect(store.folder).toEqual(folder)
+    expect(store.package).toEqual(packageSelection)
+    expect(store.choices).toEqual({})
+  })
+
+  it('keeps the comparison visible until its replacement is ready', async () => {
+    const wrapper = mount(UpdateView)
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    await store.compare()
+    const previous = store.preview
+    let finishPreview!: (value: unknown) => void
+    invoke.mockImplementation((command: string) => command === 'update_two_way_preview'
+      ? new Promise((resolve) => { finishPreview = resolve }) : defaultInvoke(command))
+    const comparing = store.compare()
+    await flushPromises()
+    expect(store.preview).toEqual(previous)
+    expect(wrapper.find('.panes').exists()).toBe(true)
+    expect(wrapper.find('.setup-header').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Comparing sources…')
+    expect(store.canApply).toBe(false)
+    expect(wrapper.findAll('.file').every((file) => file.attributes('disabled') !== undefined)).toBe(true)
+    finishPreview({ ...preview, handle: '123e4567-e89b-42d3-a456-426614174004' })
+    await comparing
+    await flushPromises()
+    expect(wrapper.find('.setup-header').exists()).toBe(false)
+    expect(store.preview?.handle).toBe('123e4567-e89b-42d3-a456-426614174004')
+    expect(store.canApply).toBe(true)
+  })
+
+  it('invalidates the released comparison if its replacement fails', async () => {
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    await store.compare()
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'update_two_way_preview') throw new Error('comparison failed')
+      return defaultInvoke(command)
+    })
+    await store.compare()
+    expect(store.preview).toBeUndefined()
+    expect(store.error).toBeDefined()
+    expect(store.canApply).toBe(false)
+    expect(store.folder).toBeDefined()
+    expect(store.package).toBeDefined()
+  })
+
+  it('navigates visible files with the keyboard without changing outcomes', async () => {
+    const wrapper = mount(UpdateView, { attachTo: document.body })
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    await store.compare()
+    await flushPromises()
+    const decisions = { ...store.choices }
+    const first = wrapper.find('.file')
+    ;(first.element as HTMLElement).focus()
+    await first.trigger('keydown', { key: 'ArrowDown' })
+    await flushPromises()
+    expect(store.selectedPath).toBe('server/settings.lua')
+    expect(document.activeElement?.getAttribute('data-path')).toBe('server/settings.lua')
+    await wrapper.find('[data-path="server/settings.lua"]').trigger('keydown', { key: 'End' })
+    await flushPromises()
+    expect(store.selectedPath).toBe('data/notes.txt')
+    expect(store.choices).toEqual(decisions)
+
+    await wrapper.find('.file-outcome').trigger('keydown', { key: 'ArrowDown' })
+    expect(store.selectedPath).toBe('data/notes.txt')
+    wrapper.unmount()
+  })
+
+  it('labels merge and whole-file preservation differently', async () => {
+    invoke.mockImplementation(async (command: string) => command === 'update_two_way_preview'
+      ? { ...preview, files: preview.files.map((file) => file.path === 'server/settings.lua'
+        ? { ...file, blockCount: 0 } : file) }
+      : defaultInvoke(command))
+    const wrapper = mount(UpdateView)
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    await store.compare()
+    await flushPromises()
+
+    const merge = wrapper.find('[aria-label="Outcome for config.lua"]')
+    const whole = wrapper.find('[aria-label="Outcome for server/settings.lua"]')
+    expect(merge.find('option[value="preserve"]').text()).toBe('Merge · preserve my edits')
+    expect(whole.find('option[value="preserve"]').text()).toBe('Keep installed file')
+    await whole.setValue('preserve')
+    await merge.setValue('preserve')
+    expect(store.choices).toEqual({})
+    expect(store.selectedPath).toBe('config.lua')
+  })
+
   it('asks which installation before it asks about any package', async () => {
     // Both packages are answers about one installation: the one it is going to and the one it
     // came from. Offered first, they invite the operator to pick two ZIPs and then wonder what
@@ -186,7 +331,7 @@ describe('the update screen', () => {
     const store = useUpdateStore()
 
     const packageButton = () => wrapper.findAll('button').find((b) => b.text().includes('2. New package'))
-    const baselineButton = () => wrapper.findAll('button').find((b) => b.text().includes('3. Installed from'))
+    const baselineButton = () => wrapper.findAll('button').find((b) => b.text().includes('Add original package'))
 
     expect(packageButton()?.attributes('disabled')).toBeDefined()
     expect(baselineButton()?.attributes('disabled')).toBeDefined()
@@ -234,8 +379,7 @@ describe('the update screen', () => {
 
     // Comparing opens the first file the operator has to look at.
     expect(store.selectedPath).toBe('config.lua')
-    // And every file starts handed over, so "I want the new version" is one press.
-    expect(store.choices).toEqual({ 'config.lua': [true, true], 'server/settings.lua': [true] })
+    expect(store.choices).toEqual({})
 
     keepEveryFile(store)
     await flushPromises()
@@ -269,9 +413,9 @@ describe('the update screen', () => {
     keepEveryFile(store)
     await flushPromises()
 
-    const tick = wrapper.find('.file-row.review input[type="checkbox"]')
+    const tick = wrapper.find('.file-row.review select')
     expect(tick.exists()).toBe(true)
-    await tick.setValue(true)
+    await tick.setValue('replace')
     await flushPromises()
 
     expect(store.choices['config.lua']).toEqual([true, true])
@@ -290,9 +434,7 @@ describe('the update screen', () => {
     })
   })
 
-  it('starts with every file handed to the update, and takes one back on a tick', async () => {
-    // The operator who wants the new version presses Update; the one with work to protect unticks
-    // the file that holds it. Both are one gesture, and neither is the wrong way round.
+  it('preserves edits by default and replaces a file only after an explicit choice', async () => {
     const wrapper = mount(UpdateView)
     const store = useUpdateStore()
     await store.chooseFolder()
@@ -300,18 +442,84 @@ describe('the update screen', () => {
     await store.compare()
     await flushPromises()
 
-    expect(store.everyFileTaken).toBe(true)
-    expect(store.sweepIsWholeUpdate).toBe(true)
-    const rows = wrapper.findAll('.file-row.review input[type="checkbox"]')
+    expect(store.everyFileTaken).toBe(false)
+    expect(store.sweepIsWholeUpdate).toBe(false)
+    const rows = wrapper.findAll('.file-row.review select')
     expect(rows).toHaveLength(2)
-    expect(rows.every((tick) => (tick.element as HTMLInputElement).checked)).toBe(true)
+    expect(rows.every((control) => (control.element as HTMLSelectElement).value === 'preserve')).toBe(true)
 
-    await rows[0]?.setValue(false)
+    await rows[0]?.setValue('replace')
     await flushPromises()
-    expect(store.choices).toEqual({ 'server/settings.lua': [true] })
+    expect(store.choices).toEqual({ 'config.lua': [true, true] })
     // One file back is no longer the whole update, so the rest is a merge again.
     expect(store.sweepIsWholeUpdate).toBe(false)
     expect(wrapper.text()).toContain('1 merged, your lines kept')
+  })
+
+  it('requires an explicit whole-file decision before allowing any write', async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'update_two_way_preview') return {
+        ...preview,
+        files: preview.files.map((file) => file.path === 'config.lua' ? { ...file, blockCount: 0 } : file),
+        unmergeable: ['config.lua'],
+      }
+      return defaultInvoke(command)
+    })
+    const wrapper = mount(UpdateView)
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    await store.compare()
+    await flushPromises()
+    const choice = wrapper.find('[aria-label="Outcome for config.lua"]')
+    expect((choice.element as HTMLSelectElement).value).toBe('')
+    expect(choice.attributes('disabled')).toBeUndefined()
+    expect(store.canApply).toBe(false)
+    expect(wrapper.find('.actions .primary').attributes('disabled')).toBeDefined()
+    await store.requestApply()
+    await store.apply()
+    expect(store.confirming).toBe(false)
+    expect(invoke.mock.calls.some(([command]) => command === 'update_two_way_apply')).toBe(false)
+
+    await choice.setValue('preserve')
+    expect(store.canApply).toBe(true)
+    expect(store.choices).toEqual({})
+    expect(store.pendingWholeFiles).toHaveLength(0)
+    await store.compare()
+    expect(store.pendingWholeFiles).toHaveLength(1)
+    expect(store.canApply).toBe(false)
+  })
+
+  it.each(['success', 'failure'])('ignores a stale diff %s while a newer file is loading', async (outcome) => {
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    await store.compare()
+    let finishOld!: (value: unknown) => void
+    let failOld!: (reason: unknown) => void
+    let finishCurrent!: (value: unknown) => void
+    invoke.mockImplementation((command: string, args?: unknown) => {
+      if (command !== 'update_two_way_get_diff') return defaultInvoke(command)
+      const path = (args as { request: { path: string } }).request.path
+      return path === 'server/settings.lua'
+        ? new Promise((resolve, reject) => { finishOld = resolve; failOld = reject })
+        : new Promise((resolve) => { finishCurrent = resolve })
+    })
+    const old = store.openFile('server/settings.lua')
+    const current = store.openFile('config.lua')
+    expect(store.selectedPath).toBe('config.lua')
+    expect(store.loading.diff).toBe(true)
+    if (outcome === 'success') finishOld(diff)
+    else failOld(new Error('stale read failed'))
+    await old
+    expect(store.loading.diff).toBe(true)
+    expect(store.diff).toBeUndefined()
+    expect(store.error).toBeUndefined()
+    finishCurrent(diff)
+    await current
+    expect(store.loading.diff).toBe(false)
+    expect(store.diff?.rows).toEqual(diff.rows)
+    expect(store.choices).toEqual({})
   })
 
   it('takes a file back by unticking it, rather than by a second kind of answer', async () => {
@@ -344,7 +552,7 @@ describe('the update screen', () => {
     await store.compare()
     await flushPromises()
 
-    await wrapper.find('.take-all input[type="checkbox"]').setValue(true)
+    await wrapper.find('.take-all select').setValue('replace')
     await flushPromises()
 
     // Only the file that holds a decision is answered. An unchanged file, an encrypted one and a
@@ -365,12 +573,15 @@ describe('the update screen', () => {
     keepEveryFile(store)
     await flushPromises()
 
-    await button(wrapper, 'Update')?.trigger('click')
+    await button(wrapper, 'Review update')?.trigger('click')
     await flushPromises()
 
+    expect(store.confirming).toBe(true)
+    expect(invoke.mock.calls.some(([command]) => command === 'update_two_way_apply')).toBe(false)
+    expect(wrapper.find('.confirm-files').exists()).toBe(false)
+    await wrapper.find('.confirm-actions .primary').trigger('click')
+    await flushPromises()
     const applied = invoke.mock.calls.find(([command]) => command === 'update_two_way_apply')
-    // No file was handed over, so nothing of the operator's is being replaced: there is nothing to
-    // confirm, and the apply carries no decisions.
     expect(store.confirming).toBe(false)
     expect(applied?.[1]).toEqual({
       request: { handle: PREVIEW, keepSettings: true, choices: [] },
@@ -378,24 +589,23 @@ describe('the update screen', () => {
     expect(wrapper.text()).toContain('Updated.')
     // The applied update is history, not pending work: the button is not offered again, and the
     // list stops describing changes that have already happened.
-    expect(button(wrapper, 'Update')).toBeUndefined()
+    expect(button(wrapper, 'Review update')).toBeUndefined()
     // What it says happened is what it asked for, not what the plan described.
     expect(wrapper.text()).toContain('Updated · 3 files from the update · 2 merged, your lines kept')
+    expect(wrapper.find('a[href="#/history"]').text()).toBe('View history')
     expect(button(wrapper, 'Compare again')).toBeDefined()
   })
 
   it('names the files whose own content is being replaced before it writes anything', async () => {
-    // Every file starts handed over, so an operator can reach Update without having read the list.
-    // That is the point of the default and the reason it has to be said out loud: their own work
-    // is what would go, and it goes named or not at all.
     const wrapper = mount(UpdateView)
     const store = useUpdateStore()
     await store.chooseFolder()
     await store.choosePackage()
     await store.compare()
+    store.setEveryFileChoice(true)
     await flushPromises()
 
-    await button(wrapper, 'Update')?.trigger('click')
+    await button(wrapper, 'Review update')?.trigger('click')
     await flushPromises()
 
     // Asked, not applied.
@@ -423,7 +633,7 @@ describe('the update screen', () => {
     await store.compare()
     await flushPromises()
 
-    await button(wrapper, 'Update')?.trigger('click')
+    await button(wrapper, 'Review update')?.trigger('click')
     await flushPromises()
     // The confirmation's own button, not the footer's.
     await wrapper.find('.confirm-actions .primary').trigger('click')
@@ -431,9 +641,9 @@ describe('the update screen', () => {
 
     expect(store.confirming).toBe(false)
     const applied = invoke.mock.calls.find(([command]) => command === 'update_two_way_apply')
-    // Every file handed over is the whole update, served from the package's own bytes.
+    // The default update preserves edits and sends no replacement decisions.
     expect(applied?.[1]).toEqual({
-      request: { handle: PREVIEW, keepSettings: false, choices: [] },
+      request: { handle: PREVIEW, keepSettings: true, choices: [] },
     })
     expect(wrapper.text()).toContain('Updated.')
   })
@@ -534,7 +744,7 @@ describe('the update screen', () => {
     await store.compare()
     await flushPromises()
 
-    const apply = button(wrapper, 'Update')
+    const apply = button(wrapper, 'Review update')
     expect(apply?.attributes('disabled')).toBeUndefined()
     store.loading.apply = true
     await flushPromises()
@@ -748,7 +958,7 @@ describe('the update screen', () => {
     expect(wrapper.text()).toContain('1.0.0 → 2.0.0')
   })
 
-  it('keeps the files the operator took back when it compares again', async () => {
+  it('preserves edits and clears replacement choices when a new comparison is requested', async () => {
     // After an update the primary button becomes "Compare again" in the same place. Re-ticking
     // every file there turns "keep mine" back into "hand it over" under the button they just
     // pressed, leaving only the confirmation between a second press and the edits they had
@@ -761,6 +971,7 @@ describe('the update screen', () => {
     await flushPromises()
 
     store.setFileChoice('config.lua', false)
+    store.setFileChoice('server/settings.lua', true)
     expect(store.choices['config.lua']).toBeUndefined()
     expect(store.choices['server/settings.lua']).toBeDefined()
 
@@ -779,7 +990,7 @@ describe('the update screen', () => {
     await flushPromises()
 
     expect(store.choices['config.lua']).toBeUndefined()
-    expect(store.choices['server/settings.lua']).toBeDefined()
+    expect(store.choices['server/settings.lua']).toBeUndefined()
   })
 
   it('says a package declaring the installed version may be the wrong file', async () => {
@@ -810,7 +1021,7 @@ describe('the update screen', () => {
 
     expect(wrapper.text()).toContain('the one already installed')
     // It is a caution, not a refusal: shipping a fix without moving the number is real work.
-    expect(button(wrapper, 'Update')).toBeDefined()
+    expect(button(wrapper, 'Review update')).toBeDefined()
   })
 
   it('says nothing about versions when a manifest declares none', async () => {
@@ -844,7 +1055,8 @@ describe('the update screen', () => {
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('→')
-    expect(wrapper.text()).toContain('gksphone · 7 files')
+    expect(wrapper.find('.source-summary').text()).toContain('gksphone')
+    expect(wrapper.find('.rail-title').text()).toContain('7 files')
   })
   it('passes the package installed from, and reports what it settled', async () => {
     // Without it, every editable file that differs is a question. With it, only the ones the
@@ -1012,15 +1224,15 @@ describe('the update screen', () => {
     await store.compare()
     await flushPromises()
 
-    const takeAll = () => wrapper.find('.take-all input[type="checkbox"]')
-    await takeAll().setValue(true)
+    const takeAll = () => wrapper.find('.take-all select')
+    await takeAll().setValue('replace')
     await flushPromises()
     expect(store.everyFileTaken).toBe(true)
-    expect((takeAll().element as HTMLInputElement).checked).toBe(true)
+    expect((takeAll().element as HTMLSelectElement).value).toBe('replace')
     // ...and it still is not a sweep, because the list is not the whole list.
     expect(store.sweepIsWholeUpdate).toBe(false)
 
-    await takeAll().setValue(false)
+    await takeAll().setValue('preserve')
     await flushPromises()
     expect(store.choices).toEqual({})
 
@@ -1063,8 +1275,9 @@ describe('the update screen', () => {
 
     const row = (path: string) =>
       wrapper.findAll('.file-row').find((candidate) => candidate.text().includes(path))
-    expect(row('config.lua')?.text()).toContain('merged, your values kept')
-    expect(row('server/settings.lua')?.text()).toContain('stays yours whole')
+    expect(row('config.lua')?.find('option[value="preserve"]').text()).toBe('Merge · preserve my edits')
+    expect(row('server/settings.lua')?.find('option[value="preserve"]').text()).toBe('Keep installed file')
+    expect((row('server/settings.lua')?.find('select').element as HTMLSelectElement).value).toBe('preserve')
 
     const summary = () => wrapper.find('.actions .summary').text()
     expect(summary()).toContain('1 merged, your lines kept')
@@ -1124,6 +1337,11 @@ describe('the update screen', () => {
     ])
     expect(wrapper.text()).toContain('7 of your values are kept in it')
     expect(wrapper.text()).toContain('combined by key')
+    store.setFileChoice('locales/tr.json', true)
+    await flushPromises()
+    expect(wrapper.findAll('.kept li')).toHaveLength(0)
+    expect(wrapper.text()).not.toContain('7 of your values are kept in it')
+    expect(wrapper.text()).toContain('Your existing values are not kept')
   })
 
   it('will not compare while a source dialog is open', async () => {
@@ -1277,14 +1495,14 @@ describe('the update screen', () => {
 
     const row = () =>
       wrapper.findAll('.file-row').find((candidate) => candidate.text().includes('config.lua'))
-    expect(row()?.find('input[type="checkbox"]').exists()).toBe(true)
-    expect(row()?.text()).toContain('stays yours whole')
+    expect(row()?.find('select').exists()).toBe(true)
+    expect((row()?.find('select').element as HTMLSelectElement).value).toBe('preserve')
     expect(wrapper.text()).toContain('1 stays yours whole')
 
-    await row()?.find('input[type="checkbox"]').setValue(true)
+    await row()?.find('select').setValue('replace')
     await flushPromises()
     expect(store.choices).toEqual({ 'config.lua': [] })
-    expect(row()?.text()).toContain('from the update')
+    expect((row()?.find('select').element as HTMLSelectElement).value).toBe('replace')
     expect(wrapper.text()).not.toContain('stays yours whole')
 
     await store.openFile('config.lua')

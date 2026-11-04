@@ -6,7 +6,7 @@ import HistoryView from './HistoryView.vue'
 import { useRecoveryStore } from '@/stores/recovery'
 
 const clear = {
-  disposition: 'clear',
+  disposition: 'clear' as const,
   activeRecovery: false,
   terminalEvidence: false,
   manualAttention: false,
@@ -140,6 +140,107 @@ describe('the history screen', () => {
 
     expect(wrapper.text()).toContain('2.4.0 → 2.7.1')
     expect(button(wrapper, 'Undo this update')).toBeDefined()
+  })
+
+  it('filters by resource, version, or outcome without writing anything', async () => {
+    const wrapper = mount(HistoryView)
+    await flushPromises()
+    const search = wrapper.find('input[type="search"]')
+    await search.setValue('gks-tablet')
+    expect(wrapper.findAll('[data-history-entry]')).toHaveLength(1)
+    expect(wrapper.find('.detail h2').text()).toBe('gks-tablet')
+    expect(button(wrapper, 'Undo this update')).toBeUndefined()
+    await search.setValue('2.7.1')
+    expect(wrapper.find('.detail h2').text()).toBe('gksphone')
+    await search.setValue('updated')
+    expect(wrapper.findAll('[data-history-entry]')).toHaveLength(2)
+    await search.setValue('no-such-resource')
+    expect(wrapper.findAll('[data-history-entry]')).toHaveLength(0)
+    expect(wrapper.text()).toContain('No updates match')
+    expect(button(wrapper, 'Undo this update')).toBeUndefined()
+    expect(invoke.mock.calls.some(([command]) => command === 'update_history_undo')).toBe(false)
+  })
+
+  it('navigates history with arrow keys and cancels restoration with Escape', async () => {
+    const wrapper = mount(HistoryView, { attachTo: document.body })
+    await flushPromises()
+    const first = wrapper.find('[data-history-entry]')
+    ;(first.element as HTMLElement).focus()
+    await first.trigger('keydown', { key: 'ArrowDown' })
+    await flushPromises()
+    expect(wrapper.find('.detail h2').text()).toBe('gks-tablet')
+    expect(document.activeElement?.textContent).toContain('gks-tablet')
+    await wrapper.find('[aria-current="true"]').trigger('keydown', { key: 'Home' })
+    await flushPromises()
+    expect(wrapper.find('.detail h2').text()).toBe('gksphone')
+    await wrapper.find('.undo > button').trigger('click')
+    await flushPromises()
+    expect(document.activeElement).toBe(wrapper.find('[data-cancel-undo]').element)
+    await wrapper.find('.undo-confirm').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(wrapper.find('.undo-confirm').exists()).toBe(false)
+    expect(invoke.mock.calls.some(([command]) => command === 'update_history_undo')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('cancels an unsubmitted restoration when another update is selected', async () => {
+    const wrapper = mount(HistoryView)
+    await flushPromises()
+    await wrapper.find('.undo > button').trigger('click')
+    expect(wrapper.find('.undo-confirm').exists()).toBe(true)
+    await wrapper.findAll('[data-history-entry]')[1]?.trigger('click')
+    expect(wrapper.find('.detail h2').text()).toBe('gks-tablet')
+    expect(wrapper.find('.undo-confirm').exists()).toBe(false)
+    expect(invoke.mock.calls.some(([command]) => command === 'update_history_undo')).toBe(false)
+  })
+
+  it('keeps the chosen update fixed while restoration is running', async () => {
+    const wrapper = mount(HistoryView)
+    await flushPromises()
+    let finishUndo!: (result: unknown) => void
+    invoke.mockImplementationOnce(() => new Promise((resolve) => { finishUndo = resolve }))
+    await wrapper.find('.undo > button').trigger('click')
+    await wrapper.find('.undo-confirm .primary').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('input[type="search"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.findAll('[data-history-entry]').every((entry) => entry.attributes('disabled') !== undefined)).toBe(true)
+    expect(wrapper.find('[data-cancel-undo]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.detail h2').text()).toBe('gksphone')
+    finishUndo(undoResult)
+    await flushPromises()
+    expect(wrapper.find('input[type="search"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('distinguishes unreadable history from an empty history and allows a read-only retry', async () => {
+    invoke.mockRejectedValueOnce(new Error('Could not read history'))
+    const recovery = useRecoveryStore()
+    recovery.overview = { ...clear }
+    recovery.overviewPhase = 'ready'
+    const wrapper = mount(HistoryView)
+    await flushPromises()
+    expect(wrapper.find('.history-error').text()).toContain('Could not read your updates')
+    expect(wrapper.text()).not.toContain('Nothing yet.')
+    await wrapper.find('.history-error button').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.history-error').exists()).toBe(false)
+    expect(wrapper.findAll('[data-history-entry]')).toHaveLength(2)
+  })
+
+  it('shows recovery only when needed and keeps restoration unavailable until it is resolved', async () => {
+    const recovery = useRecoveryStore()
+    recovery.overview = { ...clear, activeRecovery: true, disposition: 'attention_required' }
+    recovery.overviewPhase = 'ready'
+    const wrapper = mount(HistoryView)
+    await flushPromises()
+    expect(wrapper.find('.recover').exists()).toBe(true)
+    expect(wrapper.find('.detail > :first-child').classes()).toContain('recover')
+    expect(wrapper.text()).toContain('Needs attention')
+    expect(wrapper.find('.undo > button').attributes('disabled')).toBeDefined()
+    expect(wrapper.findAll('button').find((candidate) => candidate.text() === 'Inspect resource')?.attributes('disabled')).toBeDefined()
+    recovery.overview = { ...clear }
+    await flushPromises()
+    expect(wrapper.find('.recover').exists()).toBe(false)
+    expect(wrapper.find('.undo > button').attributes('disabled')).toBeUndefined()
   })
 
   it('asks before writing to the installation', async () => {
