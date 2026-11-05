@@ -4,6 +4,7 @@ import {
   asDesktopError,
   selectInstalledRoot,
   selectPackageFile,
+  sessionReleaseSelection,
   updateTwoWayApply,
   updateTwoWayGetDiff,
   updateTwoWayPreview,
@@ -122,6 +123,22 @@ async function releasePreview(handle: string | undefined) {
   }
 }
 
+/**
+ * Let go of a selection nothing here points at any more.
+ *
+ * The backend holds a fixed number of them, and every folder or ZIP the operator picks takes one.
+ * Without this, sixteen picks in a session and the next one is refused with "the selection limit
+ * has been reached". A selection is only released by the screen that made it.
+ */
+async function releaseSelection(handle: string | undefined) {
+  if (handle === undefined) return
+  try {
+    await sessionReleaseSelection({ handle })
+  } catch {
+    // A selection that cannot be released now is dropped with the session.
+  }
+}
+
 export const useUpdateStore = defineStore('update', {
   state: initialState,
   getters: {
@@ -165,7 +182,14 @@ export const useUpdateStore = defineStore('update', {
     },
     canApply(state): boolean {
       return state.preview !== undefined && !state.loading.apply && !state.loading.compare && state.outcome === undefined &&
+        // An earlier update still on record stands in the way. Offering the button anyway only
+        // led to a confirmation whose last step quietly did nothing.
+        !this.blockedByEarlierUpdate &&
         !useRecoveryStore().durableOperationInProgress && this.pendingWholeFiles.length === 0
+    },
+    /** True while an earlier update is on record, finished or not, and has to be closed first. */
+    blockedByEarlierUpdate(state): boolean {
+      return state.blocked === 'finishable' || state.blocked === 'attention'
     },
     /** Files worth showing: everything the update would touch, quietest last. */
     changedFiles(state): TwoWayFile[] {
@@ -289,8 +313,10 @@ export const useUpdateStore = defineStore('update', {
       try {
         const response = await selectInstalledRoot()
         if (!response.cancelled && response.selection !== undefined) {
+          const previous = this.folder
           this.folder = response.selection
           await this.discardPreview()
+          await releaseSelection(previous?.handle)
         }
       } catch (error) {
         this.error = asDesktopError(error)
@@ -304,8 +330,10 @@ export const useUpdateStore = defineStore('update', {
       try {
         const response = await selectPackageFile()
         if (!response.cancelled && response.selection !== undefined) {
+          const previous = this.package
           this.package = response.selection
           await this.discardPreview()
+          await releaseSelection(previous?.handle)
         }
       } catch (error) {
         this.error = asDesktopError(error)
@@ -320,8 +348,10 @@ export const useUpdateStore = defineStore('update', {
       try {
         const response = await selectPackageFile()
         if (!response.cancelled && response.selection !== undefined) {
+          const previous = this.baseline
           this.baseline = response.selection
           await this.discardPreview()
+          await releaseSelection(previous?.handle)
         }
       } catch (error) {
         this.error = asDesktopError(error)
@@ -332,8 +362,10 @@ export const useUpdateStore = defineStore('update', {
     /** Go back to comparing two sides, with nothing said about who changed what. */
     async forgetBaseline() {
       if (this.loading.baseline || !this.canChooseSources || this.baseline === undefined) return
+      const previous = this.baseline
       this.baseline = undefined
       await this.discardPreview()
+      await releaseSelection(previous?.handle)
     },
     async compare() {
       if (!this.canCompare || this.folder === undefined || this.package === undefined) return
@@ -353,6 +385,13 @@ export const useUpdateStore = defineStore('update', {
         })
         this.clearPreview()
         this.preview = preview
+        // Comparing another resource is allowed while an earlier update is on record, but writing
+        // is not. Read what the workspace says now, so the screen says so before the operator has
+        // gone through the whole review rather than at its last step. No call of its own: the
+        // overview is kept current by every durable operation.
+        const recovery = useRecoveryStore()
+        if (recovery.overviewPhase === 'ready') this.readBlockedFromOverview()
+        else await this.checkPreviousUpdate()
         // A new preview is new evidence. Do not carry destructive replacement choices over to it.
         // No choices means the core's preserve-local-edits behavior, never a frontend merge.
         const first = this.changedFiles.find((file) => file.path === previousPath)
@@ -378,6 +417,24 @@ export const useUpdateStore = defineStore('update', {
     async changeSources() {
       if (!this.canChooseSources) return
       this.error = undefined
+      await this.discardPreview()
+    },
+    /**
+     * Close the finished update and go back to choosing sources.
+     *
+     * For an operator who has just updated one resource and is on their way to the next. Closing
+     * is still their explicit act — they pressed the button that says so — and it keeps every
+     * backup. Unlike closing from the banner, this does not compare again: the sources are about
+     * to change.
+     */
+    async closePreviousUpdateAndChangeSources() {
+      if (!this.canChooseSources) return
+      const recovery = useRecoveryStore()
+      this.error = undefined
+      if (recovery.canFinalizeTerminal) {
+        await recovery.finalizeTerminal(true)
+        this.readBlockedFromOverview()
+      }
       await this.discardPreview()
     },
     /** Ask the workspace whether an earlier update is still on record. */
@@ -484,9 +541,17 @@ export const useUpdateStore = defineStore('update', {
       if (this.preview === undefined || !this.canApply) return
       const recovery = useRecoveryStore()
       if (recovery.overviewPhase !== 'ready') await recovery.refreshOverview()
-      if (!recovery.overviewIsClear) return
+      if (!recovery.overviewIsClear) {
+        // Say why instead of doing nothing: the screen reads this to show what stands in the way.
+        this.readBlockedFromOverview()
+        this.confirming = false
+        return
+      }
       const generation = recovery.beginDurableOperation('apply')
-      if (generation === undefined) return
+      if (generation === undefined) {
+        this.confirming = false
+        return
+      }
       const handle = this.preview.handle
       let responseReceived = false
       this.confirming = false
@@ -557,8 +622,10 @@ export const useUpdateStore = defineStore('update', {
       this.error = undefined
     },
     async reset() {
+      const held = [this.folder, this.package, this.baseline]
       await this.discardPreview()
       Object.assign(this, initialState())
+      for (const selection of held) await releaseSelection(selection?.handle)
     },
   },
 })

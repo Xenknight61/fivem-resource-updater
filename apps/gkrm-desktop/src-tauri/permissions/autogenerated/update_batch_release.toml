@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-update-batch-release"
+description = "Enables the update_batch_release command without any pre-configured scope."
+commands.allow = ["update_batch_release"]
+
+[[permission]]
+identifier = "deny-update-batch-release"
+description = "Denies the update_batch_release command without any pre-configured scope."
+commands.deny = ["update_batch_release"]

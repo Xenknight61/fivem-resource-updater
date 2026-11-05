@@ -138,6 +138,12 @@ fn the_operators_whole_sequence_against_the_synthetic_fixtures() {
     assert_eq!(preview.resource, "gksphone");
     assert_eq!(preview.installed_version.as_deref(), Some("1.0.0"));
     assert_eq!(preview.incoming_version.as_deref(), Some("2.0.0"));
+    let manifest = preview.manifest_changes.as_ref().expect("manifest changes");
+    assert_eq!(manifest.omitted_count, 0);
+    assert_eq!(manifest.groups.len(), 1);
+    assert_eq!(manifest.groups[0].kind, "client_scripts");
+    assert_eq!(manifest.groups[0].added, ["client/new_feature.lua"]);
+    assert!(manifest.groups[0].removed.is_empty());
     let disposition = |path: &str| {
         preview
             .files
@@ -146,9 +152,11 @@ fn the_operators_whole_sequence_against_the_synthetic_fixtures() {
             .map(|file| format!("{:?}", file.disposition))
             .unwrap_or_else(|| panic!("{path} is not in the comparison"))
     };
-    // The two the customer edited are the two there is anything to decide about.
+    // The customer edited two files, but the developer changed only one of them. config.lua has
+    // two sides, so it is the one question. custom.lua ships exactly what they installed from, so
+    // what differs is theirs alone and there is nothing to decide.
     assert!(disposition("config.lua").contains("Review"));
-    assert!(disposition("client/custom.lua").contains("Review"));
+    assert!(disposition("client/custom.lua").contains("KeepLocalOnly"));
     assert!(disposition("data/customer_notes.txt").contains("KeepLocalOnly"));
     assert!(disposition("server/main.lua").contains("Unchanged"));
 

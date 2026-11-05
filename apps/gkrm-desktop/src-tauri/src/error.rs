@@ -20,6 +20,7 @@ pub enum DesktopErrorCode {
     ScanFailed,
     InvalidScanSource,
     ResourceNotFound,
+    PackageResourceNotInstalled,
     InspectionRejected,
     PlanningBusy,
     PlanLimitReached,
@@ -119,6 +120,8 @@ pub enum DesktopFailure {
     InvalidScanSource,
     #[error("resource not found")]
     ResourceNotFound,
+    #[error("package resource not installed")]
+    PackageResourceNotInstalled,
     #[error("inspection rejected")]
     InspectionRejected,
     #[error("planning busy")]
@@ -215,37 +218,37 @@ impl DesktopFailure {
             Self::InvalidRequest => DesktopError {
                 code: DesktopErrorCode::InvalidRequest,
                 category: DesktopErrorCategory::Input,
-                message: "The desktop request is invalid.",
+                message: "That request could not be understood. Try again.",
                 recoverable: true,
             },
             Self::DialogFailed => DesktopError {
                 code: DesktopErrorCode::DialogFailed,
                 category: DesktopErrorCategory::Filesystem,
-                message: "The native selection dialog failed.",
+                message: "The file picker could not be opened. Try again.",
                 recoverable: true,
             },
             Self::InvalidInstalledRoot => DesktopError {
                 code: DesktopErrorCode::InvalidInstalledRoot,
                 category: DesktopErrorCategory::Filesystem,
-                message: "The installed root selection is invalid.",
+                message: "That folder cannot be used. Choose the folder that holds your resources.",
                 recoverable: true,
             },
             Self::InvalidPackageFile => DesktopError {
                 code: DesktopErrorCode::InvalidPackageFile,
                 category: DesktopErrorCategory::Filesystem,
-                message: "The package file selection is invalid.",
+                message: "That file cannot be used. Choose a ZIP package.",
                 recoverable: true,
             },
             Self::SelectionLimitReached => DesktopError {
                 code: DesktopErrorCode::SelectionLimitReached,
                 category: DesktopErrorCategory::Selection,
-                message: "The selection limit has been reached.",
+                message: "Too many folders and files are open at once. Restart the app and try again.",
                 recoverable: true,
             },
             Self::SelectionNotFound => DesktopError {
                 code: DesktopErrorCode::SelectionNotFound,
                 category: DesktopErrorCategory::Selection,
-                message: "The selection is not available.",
+                message: "That folder or file is no longer chosen. Choose it again.",
                 recoverable: true,
             },
             Self::SelectionStale => DesktopError {
@@ -257,19 +260,19 @@ impl DesktopFailure {
             Self::SelectionBusy => DesktopError {
                 code: DesktopErrorCode::SelectionBusy,
                 category: DesktopErrorCategory::Busy,
-                message: "The selection is in use.",
+                message: "That folder or file is being used. Wait for the current step to finish.",
                 recoverable: true,
             },
             Self::SecurityRejection => DesktopError {
                 code: DesktopErrorCode::SecurityRejection,
                 category: DesktopErrorCategory::Security,
-                message: "The desktop security boundary rejected the request.",
+                message: "That folder or file was refused for safety. Links and unusual files are not accepted.",
                 recoverable: false,
             },
             Self::Busy => DesktopError {
                 code: DesktopErrorCode::Busy,
                 category: DesktopErrorCategory::Busy,
-                message: "The desktop adapter is busy.",
+                message: "Another step is still running. Wait for it to finish.",
                 recoverable: true,
             },
             Self::ScanBusy => DesktopError {
@@ -302,22 +305,28 @@ impl DesktopFailure {
                 message: "The scan source is invalid.",
                 recoverable: true,
             },
+            Self::PackageResourceNotInstalled => DesktopError {
+                code: DesktopErrorCode::PackageResourceNotInstalled,
+                category: DesktopErrorCategory::Selection,
+                message: "This package is for a resource that is not in the folder you chose.",
+                recoverable: true,
+            },
             Self::ResourceNotFound => DesktopError {
                 code: DesktopErrorCode::ResourceNotFound,
                 category: DesktopErrorCategory::Selection,
-                message: "The resource is not available.",
+                message: "That resource is not in the folder you chose.",
                 recoverable: true,
             },
             Self::InspectionRejected => DesktopError {
                 code: DesktopErrorCode::InspectionRejected,
                 category: DesktopErrorCategory::Filesystem,
-                message: "The inspection was rejected.",
+                message: "This ZIP could not be read as a FiveM resource.",
                 recoverable: true,
             },
             Self::PlanningBusy => DesktopError {
                 code: DesktopErrorCode::PlanningBusy,
                 category: DesktopErrorCategory::Busy,
-                message: "A trusted operation is already running.",
+                message: "Another step is still running. Wait for it to finish.",
                 recoverable: true,
             },
             Self::PlanLimitReached => DesktopError {
@@ -377,7 +386,7 @@ impl DesktopFailure {
             Self::PlanCreationFailed => DesktopError {
                 code: DesktopErrorCode::PlanCreationFailed,
                 category: DesktopErrorCategory::Filesystem,
-                message: "The update plan could not be created.",
+                message: "The comparison could not be made. Check that the folder and the ZIP are the ones you meant.",
                 recoverable: true,
             },
             Self::UpdateAlreadyApplied => DesktopError {
@@ -413,25 +422,25 @@ impl DesktopFailure {
             Self::ResourceSelectionStale => DesktopError {
                 code: DesktopErrorCode::ResourceSelectionStale,
                 category: DesktopErrorCategory::Selection,
-                message: "The selected resource is no longer valid.",
+                message: "That resource changed or is no longer there. Choose it again.",
                 recoverable: true,
             },
             Self::SourceChanged => DesktopError {
                 code: DesktopErrorCode::SourceChanged,
                 category: DesktopErrorCategory::Filesystem,
-                message: "The update sources changed before planning completed.",
+                message: "The files changed while they were being compared. Nothing was written. Compare again.",
                 recoverable: true,
             },
             Self::BaselineNotFound => DesktopError {
                 code: DesktopErrorCode::BaselineNotFound,
                 category: DesktopErrorCategory::Filesystem,
-                message: "No trusted baseline is available.",
+                message: "The package this was installed from is not available. Choose it again, or compare without it.",
                 recoverable: true,
             },
             Self::BaselineAmbiguous => DesktopError {
                 code: DesktopErrorCode::BaselineAmbiguous,
                 category: DesktopErrorCategory::Filesystem,
-                message: "The trusted baseline selection is ambiguous.",
+                message: "More than one original package matches. Choose the one you installed from.",
                 recoverable: true,
             },
             Self::BaselineSessionLimitReached => DesktopError {
@@ -479,31 +488,31 @@ impl DesktopFailure {
             Self::WorkspaceCapacityReached => DesktopError {
                 code: DesktopErrorCode::WorkspaceCapacityReached,
                 category: DesktopErrorCategory::Filesystem,
-                message: "The trusted workspace capacity has been reached.",
+                message: "The app's storage for backups is full. Release old backups in History, under Local storage.",
                 recoverable: true,
             },
             Self::PlanReviewTooLarge => DesktopError {
                 code: DesktopErrorCode::PlanReviewTooLarge,
                 category: DesktopErrorCategory::Filesystem,
-                message: "The plan is too large for desktop review.",
+                message: "There are too many changed files to review here. Nothing was changed.",
                 recoverable: true,
             },
             Self::RecoveryRequired => DesktopError {
                 code: DesktopErrorCode::RecoveryRequired,
                 category: DesktopErrorCategory::Filesystem,
-                message: "Recovery is required before planning can continue.",
+                message: "An earlier update has to be closed first. Nothing was changed.",
                 recoverable: true,
             },
             Self::ArtifactPublicationFailed => DesktopError {
                 code: DesktopErrorCode::ArtifactPublicationFailed,
                 category: DesktopErrorCategory::Filesystem,
-                message: "The trusted plan artifact could not be published.",
+                message: "The comparison could not be saved. Nothing was changed. Try again.",
                 recoverable: true,
             },
             Self::PlanSessionPublicationFailed => DesktopError {
                 code: DesktopErrorCode::PlanSessionPublicationFailed,
                 category: DesktopErrorCategory::Internal,
-                message: "The desktop plan session could not be published.",
+                message: "The comparison could not be saved. Nothing was changed. Try again.",
                 recoverable: true,
             },
             Self::RecoverySessionLimitReached => DesktopError {
@@ -527,7 +536,7 @@ impl DesktopFailure {
             Self::RecoveryBusy => DesktopError {
                 code: DesktopErrorCode::RecoveryBusy,
                 category: DesktopErrorCategory::Busy,
-                message: "A trusted recovery operation is already running.",
+                message: "Another recovery step is still running. Wait for it to finish.",
                 recoverable: true,
             },
             Self::RecoveryManualAttention => DesktopError {
@@ -565,7 +574,7 @@ impl DesktopFailure {
             Self::Internal => DesktopError {
                 code: DesktopErrorCode::Internal,
                 category: DesktopErrorCategory::Internal,
-                message: "The desktop adapter failed.",
+                message: "Something unexpected went wrong. Check History before trying again.",
                 recoverable: false,
             },
         }
@@ -606,6 +615,7 @@ mod tests {
             ScanFailed,
             InvalidScanSource,
             ResourceNotFound,
+            PackageResourceNotInstalled,
             InspectionRejected,
             PlanningBusy,
             PlanLimitReached,
@@ -663,6 +673,7 @@ mod tests {
                 | ScanFailed
                 | InvalidScanSource
                 | ResourceNotFound
+                | PackageResourceNotInstalled
                 | InspectionRejected
                 | PlanningBusy
                 | PlanLimitReached

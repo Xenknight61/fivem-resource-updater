@@ -71,28 +71,33 @@ pub fn all(app_data_root: &Path) -> Vec<InstalledBaseline> {
     read(app_data_root).entries
 }
 
-/// What this installation is currently installed from, when exactly one entry names it.
+/// What one resource of an installation is currently installed from.
 ///
-/// An installation root holding several resources cannot be answered by the root alone, and
-/// guessing which of them the operator means is worse than asking them for the package.
-pub fn lookup(app_data_root: &Path, installed_root: &Path) -> Option<InstalledBaseline> {
+/// The root alone cannot answer this. A folder of many resources is one installation root for all
+/// of them, and each was last updated from its own package: handing one resource the baseline of
+/// another does not just lose evidence, it makes the next update fail against the wrong package.
+pub fn lookup(
+    app_data_root: &Path,
+    installed_root: &Path,
+    resource: &str,
+) -> Option<InstalledBaseline> {
     let wanted = installed_root.to_string_lossy();
-    let mut matches = read(app_data_root)
+    read(app_data_root)
         .entries
         .into_iter()
-        .filter(|entry| entry.installed_root == wanted);
-    let first = matches.next()?;
-    matches.next().is_none().then_some(first)
+        .find(|entry| entry.installed_root == wanted && entry.resource == resource)
 }
 
-/// Note what this installation is now installed from, replacing what it said before.
+/// Note what one resource is now installed from, replacing what it said before about that
+/// resource and no other.
 ///
 /// A failure here is not the operator's problem: the update has already run, and the note is a
 /// convenience for the next one.
 pub fn record(app_data_root: &Path, entry: InstalledBaseline) {
     let mut book = read(app_data_root);
-    book.entries
-        .retain(|existing| existing.installed_root != entry.installed_root);
+    book.entries.retain(|existing| {
+        !(existing.installed_root == entry.installed_root && existing.resource == entry.resource)
+    });
     book.entries.push(entry);
     // Oldest first, so the ones dropped are the ones least likely to be updated again.
     if book.entries.len() > MAX_ENTRIES {
@@ -114,12 +119,12 @@ pub fn record(app_data_root: &Path, entry: InstalledBaseline) {
     let _ = std::fs::rename(&temporary, &path);
 }
 
-/// Forget what an installation was installed from.
-pub fn forget(app_data_root: &Path, installed_root: &str) {
+/// Forget what one resource of an installation was installed from.
+pub fn forget(app_data_root: &Path, installed_root: &str, resource: &str) {
     let mut book = read(app_data_root);
     let before = book.entries.len();
     book.entries
-        .retain(|entry| entry.installed_root != installed_root);
+        .retain(|entry| !(entry.installed_root == installed_root && entry.resource == resource));
     if book.entries.len() == before {
         return;
     }
@@ -152,7 +157,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp");
         record(temp.path(), entry("C:/one", "aaa"));
         assert_eq!(
-            lookup(temp.path(), Path::new("C:/one"))
+            lookup(temp.path(), Path::new("C:/one"), "gksphone")
                 .expect("remembered")
                 .baseline_id,
             "aaa"
@@ -160,7 +165,7 @@ mod tests {
 
         // A second update of the same installation replaces what it was installed from.
         record(temp.path(), entry("C:/one", "bbb"));
-        let remembered = lookup(temp.path(), Path::new("C:/one")).expect("remembered");
+        let remembered = lookup(temp.path(), Path::new("C:/one"), "gksphone").expect("remembered");
         assert_eq!(remembered.baseline_id, "bbb");
         assert_eq!(read(temp.path()).entries.len(), 1);
     }
@@ -168,17 +173,48 @@ mod tests {
     #[test]
     fn an_installation_nobody_recorded_is_simply_unknown() {
         let temp = tempfile::tempdir().expect("temp");
-        assert!(lookup(temp.path(), Path::new("C:/one")).is_none());
+        assert!(lookup(temp.path(), Path::new("C:/one"), "gksphone").is_none());
         record(temp.path(), entry("C:/one", "aaa"));
-        assert!(lookup(temp.path(), Path::new("C:/two")).is_none());
+        assert!(lookup(temp.path(), Path::new("C:/two"), "gksphone").is_none());
+        assert!(lookup(temp.path(), Path::new("C:/one"), "another").is_none());
+    }
+
+    #[test]
+    fn two_resources_in_one_root_are_remembered_separately() {
+        let temp = tempfile::tempdir().expect("temp");
+        let mut banking = entry("C:/server/resources", "bank-id");
+        banking.resource = "gks-banking".into();
+        let mut garage = entry("C:/server/resources", "garage-id");
+        garage.resource = "gks-garage".into();
+        record(temp.path(), banking);
+        record(temp.path(), garage);
+
+        let root = Path::new("C:/server/resources");
+        assert_eq!(
+            lookup(temp.path(), root, "gks-banking")
+                .expect("banking")
+                .baseline_id,
+            "bank-id"
+        );
+        assert_eq!(
+            lookup(temp.path(), root, "gks-garage")
+                .expect("garage")
+                .baseline_id,
+            "garage-id"
+        );
+
+        // Forgetting one leaves the other alone.
+        forget(temp.path(), "C:/server/resources", "gks-banking");
+        assert!(lookup(temp.path(), root, "gks-banking").is_none());
+        assert!(lookup(temp.path(), root, "gks-garage").is_some());
     }
 
     #[test]
     fn undoing_an_update_forgets_what_it_installed_from() {
         let temp = tempfile::tempdir().expect("temp");
         record(temp.path(), entry("C:/one", "aaa"));
-        forget(temp.path(), "C:/one");
-        assert!(lookup(temp.path(), Path::new("C:/one")).is_none());
+        forget(temp.path(), "C:/one", "gksphone");
+        assert!(lookup(temp.path(), Path::new("C:/one"), "gksphone").is_none());
     }
 
     #[test]
@@ -187,9 +223,9 @@ mod tests {
         // every file the operator could have edited, which is correct and only longer.
         let temp = tempfile::tempdir().expect("temp");
         std::fs::write(file_for(temp.path()), b"{ not json").expect("write");
-        assert!(lookup(temp.path(), Path::new("C:/one")).is_none());
+        assert!(lookup(temp.path(), Path::new("C:/one"), "gksphone").is_none());
         // And it is replaced rather than fought with.
         record(temp.path(), entry("C:/one", "aaa"));
-        assert!(lookup(temp.path(), Path::new("C:/one")).is_some());
+        assert!(lookup(temp.path(), Path::new("C:/one"), "gksphone").is_some());
     }
 }

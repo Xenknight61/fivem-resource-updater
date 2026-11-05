@@ -49,6 +49,13 @@ pub enum TwoWayFileAction {
     Review,
     /// Present only in the installation, so it stays exactly as it is.
     KeepLocalOnly,
+    /// Operator-editable, different on the two sides, and the developer has not changed it: the
+    /// package ships exactly what the operator installed from, so the difference is the
+    /// operator's own edit. There is nothing to take and nothing to ask; it stays as it is.
+    ///
+    /// Only ever decided on evidence. Without a baseline there is no way to tell this from a file
+    /// the developer changed as well, and that case is a question for the operator.
+    KeepYours,
 }
 
 /// The extension of the pack escrow itself produces.
@@ -348,6 +355,11 @@ pub fn create_two_way_update_plan(
 
         let action = match (installed_digest, incoming) {
             (Some(local), Some((remote, _))) if local == remote => TwoWayFileAction::Unchanged,
+            // The developer's file is exactly what the operator installed, so only the operator
+            // has changed it. Asking would put a question to them that has no other side.
+            (Some(_), Some((remote, _))) if editable && baseline_digest == Some(remote) => {
+                TwoWayFileAction::KeepYours
+            }
             (Some(_), Some(_)) if editable && !untouched => TwoWayFileAction::Review,
             (Some(_), Some(_)) => TwoWayFileAction::TakeFromUpdate,
             (None, Some(_)) => TwoWayFileAction::TakeFromUpdate,
@@ -359,7 +371,10 @@ pub fn create_two_way_update_plan(
             TwoWayFileAction::Unchanged => summary.unchanged += 1,
             TwoWayFileAction::TakeFromUpdate => summary.take_from_update += 1,
             TwoWayFileAction::Review => summary.review += 1,
-            TwoWayFileAction::KeepLocalOnly => summary.keep_local_only += 1,
+            // Counted with the files that stay as they are: it is the same outcome for the operator.
+            TwoWayFileAction::KeepLocalOnly | TwoWayFileAction::KeepYours => {
+                summary.keep_local_only += 1
+            }
         }
 
         entries.push(TwoWayPlanEntry {
@@ -398,6 +413,7 @@ fn action_code(action: TwoWayFileAction) -> u64 {
         TwoWayFileAction::TakeFromUpdate => 2,
         TwoWayFileAction::Review => 3,
         TwoWayFileAction::KeepLocalOnly => 4,
+        TwoWayFileAction::KeepYours => 5,
     }
 }
 
@@ -705,6 +721,27 @@ mod tests {
         );
         assert_eq!(plan.summary().review(), 0);
         assert!(plan.entries()[0].untouched_since_install());
+    }
+
+    #[test]
+    fn a_file_only_the_operator_changed_is_kept_not_asked_about() {
+        // The package ships exactly what the operator installed from, so the difference is their
+        // own edit. Asking would put a question to them that has no other side — and it came
+        // back after every update, because an edited config never matches the package.
+        let base = baseline(&[("config.lua", 30)]);
+        let plan = plan_with_baseline(99, Some(&base));
+
+        assert_eq!(action_for(&plan, "config.lua"), TwoWayFileAction::KeepYours);
+        assert_eq!(plan.summary().review(), 0);
+        assert_eq!(plan.summary().take_from_update(), 0);
+        assert!(!plan.entries()[0].untouched_since_install());
+    }
+
+    #[test]
+    fn without_a_baseline_an_edit_still_cannot_be_told_from_a_developer_change() {
+        // The same bytes on both sides, but nothing says which side moved. That stays a question.
+        let plan = plan_with_baseline(99, None);
+        assert_eq!(action_for(&plan, "config.lua"), TwoWayFileAction::Review);
     }
 
     #[test]

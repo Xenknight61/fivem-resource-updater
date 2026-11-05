@@ -160,7 +160,7 @@ cargo run -p gkrm-cli -- plan --installed ./fixtures/installed --package ./fixtu
 | `apps/gkrm-desktop` | A Tauri shell: a Vue frontend and a thin Rust adapter over the core. |
 
 The frontend never receives a real filesystem path and cannot reach the filesystem, a shell, the
-network, or a dialog plugin on its own. It talks to exactly twenty-four typed commands and nothing
+network, or a dialog plugin on its own. It talks to exactly twenty-nine typed commands and nothing
 else.
 
 ## Developing

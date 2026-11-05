@@ -44,6 +44,59 @@ const preview = {
   usedRememberedBaseline: false,
 }
 
+const BATCH = '123e4567-e89b-42d3-a456-426614174003'
+const PACKAGES = '123e4567-e89b-42d3-a456-426614174004'
+const BATCH_PLAN = '123e4567-e89b-42d3-a456-426614174005'
+
+const batchPlan = {
+  handle: BATCH_PLAN,
+  readyCount: 3,
+  entries: [
+    {
+      id: 0, packageName: 'gks-banking-3.2.0.zip', resource: 'gks-banking', kind: 'ready',
+      review: 0, unmergeable: 0, installedVersion: '3.1.0', incomingVersion: '3.2.0',
+      summary: { unchanged: 40, takeFromUpdate: 9, review: 0, keepLocalOnly: 2, total: 51 },
+      manifestChanges: {
+        fxVersion: { installed: 'cerulean', incoming: 'cerulean' },
+        groups: [{ kind: 'client_scripts', added: ['client/atm.lua'], removed: [] }],
+        omittedCount: 0,
+      },
+    },
+    {
+      id: 1, packageName: 'gks-garage.zip', resource: 'gks-garage', kind: 'ready',
+      review: 0, unmergeable: 0, installedVersion: '1.4.0', incomingVersion: '1.5.1',
+      summary: { unchanged: 12, takeFromUpdate: 4, review: 0, keepLocalOnly: 1, total: 17 },
+    },
+    {
+      id: 2, packageName: 'gks-hud.zip', resource: 'gks-hud', kind: 'ready',
+      review: 0, unmergeable: 0, installedVersion: '2.0.0', incomingVersion: '2.0.1',
+      summary: { unchanged: 30, takeFromUpdate: 1, review: 0, keepLocalOnly: 0, total: 31 },
+    },
+    {
+      id: 3, packageName: 'gksphone-update.zip', resource: 'gksphone', kind: 'needs_review',
+      review: 2, unmergeable: 0, installedVersion: '1.0.0', incomingVersion: '2.0.0',
+      summary: preview.summary,
+    },
+    {
+      id: 4, packageName: 'gks-tablet.zip', resource: 'gks-tablet', kind: 'blocked_by_earlier_update',
+      review: 0, unmergeable: 0,
+    },
+    {
+      id: 5, packageName: 'gks-radio.zip', resource: 'gks-radio', kind: 'no_installed_resource',
+      review: 0, unmergeable: 0,
+    },
+    {
+      id: 6, packageName: 'gks-bank-copy.zip', resource: 'gks-banking', kind: 'duplicate_package',
+      review: 0, unmergeable: 0,
+    },
+    {
+      id: 7, packageName: 'gks-phone-case.zip', resource: 'gks-case', kind: 'up_to_date',
+      review: 0, unmergeable: 0, installedVersion: '1.0.0', incomingVersion: '1.0.0',
+      summary: { unchanged: 8, takeFromUpdate: 0, review: 0, keepLocalOnly: 0, total: 8 },
+    },
+  ],
+}
+
 const diff = {
   available: true,
   truncated: false,
@@ -162,6 +215,28 @@ const answers: Record<string, unknown> = {
   update_two_way_get_diff: diff,
   update_two_way_apply: { outcome: 'committed', summary: preview.summary },
   update_two_way_release: { released: true },
+  select_packages_folder: {
+    cancelled: false,
+    selection: { handle: PACKAGES, kind: 'packagesFolder', displayLabel: 'downloads' },
+  },
+  update_batch_plan: batchPlan,
+  update_batch_apply: {
+    committedCount: scenario === 'batch-stopped' ? 1 : 3,
+    results: batchPlan.entries.map((entry) => ({
+      id: entry.id,
+      result:
+        entry.kind !== 'ready'
+          ? 'skipped'
+          : scenario === 'batch-stopped'
+            ? entry.id === 0 ? 'committed' : entry.id === 1 ? 'failed' : 'not_attempted'
+            : 'committed',
+    })),
+  },
+  update_batch_open_package: {
+    cancelled: false,
+    selection: { handle: BATCH, kind: 'packageFile', displayLabel: 'gksphone-update.zip' },
+  },
+  update_batch_release: { released: true },
   update_history_list: { entries: historyEntries },
   storage_report: storage,
 }
@@ -198,6 +273,25 @@ async function arrange() {
   }
   if (state === 'history') {
     await router.push('/history')
+    return
+  }
+
+  if (state.startsWith('batch')) {
+    await router.push('/batch')
+    if (state === 'batch') return
+    const { useBatchStore } = await import('@/stores/batch')
+    const batch = useBatchStore(pinia)
+    await batch.chooseInstalled()
+    await batch.choosePackages()
+    if (state === 'batch-sources') return
+    await batch.compare()
+    if (state === 'batch-compared') return
+    if (state === 'batch-confirming') {
+      batch.requestApply()
+      return
+    }
+    // 'batch-applied' and 'batch-stopped' both press the button.
+    await batch.apply()
     return
   }
 

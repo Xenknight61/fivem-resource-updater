@@ -76,7 +76,8 @@ function installDerivedState(selection: SelectionSummary, scanHandle: string) {
   if (selection.kind === 'packageFile') scan.packageIntent = intent
   scan.scanHandle = scanHandle
   scan.summary = {
-    sourceKind: selection.kind,
+    // Only the two kinds the scan screens know about ever reach this helper.
+    sourceKind: selection.kind as 'installedRoot' | 'packageFile',
     sourceLabel: selection.displayLabel,
     resourceCount: 1,
     warningCount: 0,

@@ -1,5 +1,6 @@
 pub mod baseline;
 pub mod baseline_free_plan;
+pub mod batch;
 pub mod comparison;
 #[cfg(all(feature = "desktop-test-support", debug_assertions))]
 pub mod desktop_test_support;
@@ -11,6 +12,7 @@ pub mod installed_path;
 pub mod installed_scan;
 mod json_merge;
 pub mod manifest;
+pub mod manifest_diff;
 mod merge_content;
 pub mod package_limits;
 mod package_source;
@@ -56,6 +58,10 @@ pub use baseline_free_plan::{
     ExpectedFileState, PlannedFile, ResourceUpdatePlan, UpdatePlanCounts, UpdatePlanReason,
     UpdatePlanWarning,
 };
+pub use batch::{
+    apply_batch, plan_batch, BatchApplyOutcome, BatchApplyResult, BatchEntryOutcome, BatchPlan,
+    BatchPlanEntry,
+};
 pub use comparison::{
     compare_installation_to_zip, ComparedFile, ComparedFileSide, ComparedIncomingFile,
     ComparisonLimits, ComparisonWarning, FileComparisonStatus, InstallationComparisonReport,
@@ -87,6 +93,10 @@ pub use manifest::{
     declared_manifest_version, parse_resource_manifest_source, parse_zip_resource_manifests,
     FxManifest, FxManifestWarning, ManifestDeclarationKind, ManifestLimits, ManifestString,
     ParsedZipResourceManifest, ZipManifestParseReport,
+};
+pub use manifest_diff::{
+    compare_manifests, plan_manifest_changes, ListChange, ManifestChanges, ResourceManifestChanges,
+    ValueChange,
 };
 pub use package_limits::PackageLimits;
 pub use resource_discovery::{

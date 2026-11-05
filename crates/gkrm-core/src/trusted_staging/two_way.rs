@@ -166,9 +166,9 @@ fn map_two_way_entries(
         };
 
         let mapped = match entry.action() {
-            TwoWayFileAction::Unchanged | TwoWayFileAction::KeepLocalOnly => {
-                keep_installed_file(entry.installed_digest())?
-            }
+            TwoWayFileAction::Unchanged
+            | TwoWayFileAction::KeepLocalOnly
+            | TwoWayFileAction::KeepYours => keep_installed_file(entry.installed_digest())?,
             TwoWayFileAction::TakeFromUpdate => take_incoming(entry.incoming_digest())?,
             TwoWayFileAction::Review => {
                 // A reviewed file reaches staging with the merged bytes the operator approved.

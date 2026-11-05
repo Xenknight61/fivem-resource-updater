@@ -30,6 +30,14 @@ import type {
   StartScanResponse,
   SelectionDialogResult,
   SelectionKind,
+  BatchApplyResponse,
+  BatchApplyResultKind,
+  BatchEntry,
+  BatchEntryKind,
+  BatchEntryResult,
+  BatchOpenPackageResponse,
+  BatchPlanResponse,
+  BatchReleaseResponse,
   SelectionSummary,
   UpdatePlanGetChangeDetailResponse,
   PlanDiffAvailability,
@@ -69,6 +77,9 @@ import type {
   TwoWayWholeFileReason,
   TwoWayGetDiffResponse,
   TwoWayPreviewResponse,
+  ManifestChangeGroup,
+  ManifestChangeKind,
+  ManifestChanges,
   TwoWayReleaseResponse,
   TwoWaySummary,
   HeldBaseline,
@@ -79,7 +90,7 @@ import type {
   UpdateHistoryListResponse,
 } from '@/types/commands'
 
-const selectionKinds = new Set<SelectionKind>(['installedRoot', 'packageFile'])
+const selectionKinds = new Set<SelectionKind>(['installedRoot', 'packageFile', 'packagesFolder'])
 const errorCodes = new Set<DesktopErrorCode>([
   'invalid_request',
   'dialog_failed',
@@ -96,6 +107,7 @@ const errorCodes = new Set<DesktopErrorCode>([
   'scan_failed',
   'invalid_scan_source',
   'resource_not_found',
+  'package_resource_not_installed',
   'inspection_rejected',
   'selection_busy',
   'planning_busy',
@@ -155,7 +167,7 @@ const canonicalUuidV4Pattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9
 export const genericDesktopError: DesktopError = {
   code: 'internal',
   category: 'internal',
-  message: 'The desktop adapter failed.',
+  message: 'Something unexpected went wrong. Check History before trying again.',
   recoverable: false,
 }
 
@@ -1174,6 +1186,68 @@ function decodeTwoWaySummary(value: unknown): TwoWaySummary {
   }
 }
 
+const MANIFEST_CHANGE_KINDS = new Set<ManifestChangeKind>([
+  'dependencies',
+  'client_scripts',
+  'server_scripts',
+  'shared_scripts',
+  'files',
+  'ui_pages',
+  'escrow_ignore',
+])
+/** Mirrors the backend's per-list cap. */
+const MAX_MANIFEST_CHANGE_ENTRIES = 100
+
+function decodeManifestEntries(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > MAX_MANIFEST_CHANGE_ENTRIES) {
+    throw new Error('malformed manifest changes')
+  }
+  return value.map((entry) => {
+    if (!isString(entry, MAX_TWO_WAY_PATH_CHARS)) throw new Error('malformed manifest changes')
+    return entry
+  })
+}
+
+function decodeManifestChanges(value: unknown): ManifestChanges {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.groups) ||
+    value.groups.length > MANIFEST_CHANGE_KINDS.size ||
+    !isSafeInteger(value.omittedCount)
+  ) {
+    throw new Error('malformed manifest changes')
+  }
+  const groups = value.groups.map((group): ManifestChangeGroup => {
+    if (!isRecord(group) || !MANIFEST_CHANGE_KINDS.has(group.kind as ManifestChangeKind)) {
+      throw new Error('malformed manifest changes')
+    }
+    return {
+      kind: group.kind as ManifestChangeKind,
+      added: decodeManifestEntries(group.added),
+      removed: decodeManifestEntries(group.removed),
+    }
+  })
+  let fxVersion: ManifestChanges['fxVersion']
+  if (value.fxVersion !== undefined) {
+    const fx = value.fxVersion
+    if (!isRecord(fx)) throw new Error('malformed manifest changes')
+    for (const key of ['installed', 'incoming'] as const) {
+      if (fx[key] !== undefined && !isString(fx[key], MAX_VERSION_CHARS)) {
+        throw new Error('malformed manifest changes')
+      }
+    }
+    fxVersion = {
+      ...(fx.installed === undefined ? {} : { installed: fx.installed as string }),
+      ...(fx.incoming === undefined ? {} : { incoming: fx.incoming as string }),
+    }
+  }
+  return {
+    ...(fxVersion === undefined ? {} : { fxVersion }),
+    groups,
+    omittedCount: value.omittedCount,
+  }
+}
+
 export function decodeTwoWayPreviewResponse(value: unknown): TwoWayPreviewResponse {
   if (
     !isRecord(value) ||
@@ -1205,6 +1279,9 @@ export function decodeTwoWayPreviewResponse(value: unknown): TwoWayPreviewRespon
     ...(value.incomingVersion === undefined
       ? {}
       : { incomingVersion: value.incomingVersion as string }),
+    ...(value.manifestChanges === undefined
+      ? {}
+      : { manifestChanges: decodeManifestChanges(value.manifestChanges) }),
     summary: decodeTwoWaySummary(value.summary),
     files: value.files.map(decodeTwoWayFile),
     omittedFileCount: value.omittedFileCount,
@@ -1482,4 +1559,130 @@ export function decodeUpdateHistoryListResponse(value: unknown): UpdateHistoryLi
     throw new Error('malformed update history response')
   }
   return { entries: value.entries.map(decodeUpdateHistoryEntry) }
+}
+
+// --- Batch update ------------------------------------------------------------------------------
+
+/** Mirrors the backend's ceiling on packages in one batch. */
+const MAX_BATCH_ENTRIES = 256
+const MAX_BATCH_NAME_CHARS = 130
+
+const BATCH_ENTRY_KINDS = new Set<BatchEntryKind>([
+  'ready',
+  'up_to_date',
+  'needs_review',
+  'no_installed_resource',
+  'duplicate_package',
+  'not_a_single_resource',
+  'blocked_by_earlier_update',
+  'unreadable',
+])
+
+const BATCH_APPLY_RESULTS = new Set<BatchApplyResultKind>([
+  'committed',
+  'skipped',
+  'failed',
+  'not_attempted',
+])
+
+function decodeBatchEntry(value: unknown): BatchEntry {
+  if (
+    !isRecord(value) ||
+    !isSafeInteger(value.id, MAX_BATCH_ENTRIES) ||
+    !isString(value.packageName, MAX_BATCH_NAME_CHARS) ||
+    !BATCH_ENTRY_KINDS.has(value.kind as BatchEntryKind) ||
+    !isSafeInteger(value.review, MAX_TWO_WAY_FILES) ||
+    !isSafeInteger(value.unmergeable, MAX_TWO_WAY_FILES)
+  ) {
+    throw new Error('malformed batch entry')
+  }
+  for (const key of ['installedVersion', 'incomingVersion'] as const) {
+    if (value[key] !== undefined && !isString(value[key], MAX_VERSION_CHARS)) {
+      throw new Error('malformed batch entry')
+    }
+  }
+  if (value.resource !== undefined && !isString(value.resource, 256)) {
+    throw new Error('malformed batch entry')
+  }
+  return {
+    id: value.id,
+    packageName: value.packageName,
+    ...(value.resource === undefined ? {} : { resource: value.resource as string }),
+    kind: value.kind as BatchEntryKind,
+    review: value.review,
+    unmergeable: value.unmergeable,
+    ...(value.installedVersion === undefined
+      ? {}
+      : { installedVersion: value.installedVersion as string }),
+    ...(value.incomingVersion === undefined
+      ? {}
+      : { incomingVersion: value.incomingVersion as string }),
+    ...(value.summary === undefined ? {} : { summary: decodeTwoWaySummary(value.summary) }),
+    ...(value.manifestChanges === undefined
+      ? {}
+      : { manifestChanges: decodeManifestChanges(value.manifestChanges) }),
+  }
+}
+
+export function decodeBatchPlanResponse(value: unknown): BatchPlanResponse {
+  if (
+    !isRecord(value) ||
+    !isCanonicalUuidV4Handle(value.handle) ||
+    !Array.isArray(value.entries) ||
+    value.entries.length > MAX_BATCH_ENTRIES ||
+    !isSafeInteger(value.readyCount, MAX_BATCH_ENTRIES)
+  ) {
+    throw new Error('malformed batch plan response')
+  }
+  const entries = value.entries.map(decodeBatchEntry)
+  // The count the screen's button states is the count of what will be written, so it has to agree
+  // with the rows it sits beside.
+  if (entries.filter((entry) => entry.kind === 'ready').length !== value.readyCount) {
+    throw new Error('malformed batch plan response')
+  }
+  return { handle: value.handle, entries, readyCount: value.readyCount }
+}
+
+export function decodeBatchApplyResponse(value: unknown): BatchApplyResponse {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.results) ||
+    value.results.length > MAX_BATCH_ENTRIES ||
+    !isSafeInteger(value.committedCount, MAX_BATCH_ENTRIES)
+  ) {
+    throw new Error('malformed batch apply response')
+  }
+  const results = value.results.map((result): BatchEntryResult => {
+    if (
+      !isRecord(result) ||
+      !isSafeInteger(result.id, MAX_BATCH_ENTRIES) ||
+      !BATCH_APPLY_RESULTS.has(result.result as BatchApplyResultKind)
+    ) {
+      throw new Error('malformed batch apply response')
+    }
+    return { id: result.id, result: result.result as BatchApplyResultKind }
+  })
+  if (results.filter((result) => result.result === 'committed').length !== value.committedCount) {
+    throw new Error('malformed batch apply response')
+  }
+  return { results, committedCount: value.committedCount }
+}
+
+export function decodeBatchOpenPackageResponse(value: unknown): BatchOpenPackageResponse {
+  if (!isRecord(value)) throw new Error('malformed batch open package response')
+  const decoded = {
+    package: decodeSelectionSummary(value.package),
+    installed: decodeSelectionSummary(value.installed),
+  }
+  if (decoded.package.kind !== 'packageFile' || decoded.installed.kind !== 'installedRoot') {
+    throw new Error('malformed batch open package response')
+  }
+  return decoded
+}
+
+export function decodeBatchReleaseResponse(value: unknown): BatchReleaseResponse {
+  if (!isRecord(value) || value.released !== true) {
+    throw new Error('malformed batch release response')
+  }
+  return { released: true }
 }

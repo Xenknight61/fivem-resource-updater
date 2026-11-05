@@ -129,6 +129,7 @@ pub struct TwoWayUpdatePreview {
     unmergeable: Vec<(ResourceRelativePath, TwoWayWholeFile)>,
     installed_version: Option<String>,
     incoming_version: Option<String>,
+    manifest_changes: Option<crate::ManifestChanges>,
 }
 
 impl TwoWayUpdatePreview {
@@ -160,6 +161,12 @@ impl TwoWayUpdatePreview {
     /// The version the incoming package declares, on the same terms.
     pub fn incoming_version(&self) -> Option<&str> {
         self.incoming_version.as_deref()
+    }
+
+    /// What the two manifests differ in, for the operator to read before deciding. Absent when
+    /// either manifest could not be read: a partial comparison would read as a clean one.
+    pub fn manifest_changes(&self) -> Option<&crate::ManifestChanges> {
+        self.manifest_changes.as_ref()
     }
 }
 
@@ -311,25 +318,21 @@ fn declared_installed_version(
     plan: &TwoWayUpdatePlan,
     installed: &InstalledMergeContentSource,
 ) -> Option<String> {
+    let manifest = read_installed_manifest(plan, installed)?;
+    crate::declared_manifest_version(&manifest).map(str::to_owned)
+}
+
+/// The installation's own manifest, parsed and never executed. Absent on the same terms as above.
+fn read_installed_manifest(
+    plan: &TwoWayUpdatePlan,
+    installed: &InstalledMergeContentSource,
+) -> Option<crate::FxManifest> {
     let entry = plan
         .entries()
         .iter()
         .find(|entry| entry.path().as_str() == "fxmanifest.lua")?;
-    let digest = entry.installed_digest()?;
-    let max_retain = ThreeWayMergedBytesOptions::default().max_source_bytes_per_file();
-    let bytes = installed
-        .read_verified_merge_text(entry.path(), *digest, max_retain, |_| Ok(()))
-        .ok()?
-        .into_parts()
-        .1?;
-    let source = String::from_utf8(bytes).ok()?;
-    let (manifest, _) = crate::parse_resource_manifest_source(
-        "fxmanifest.lua",
-        source,
-        crate::ManifestLimits::default(),
-    )
-    .ok()?;
-    crate::declared_manifest_version(&manifest).map(str::to_owned)
+    let digest = *entry.installed_digest()?;
+    crate::manifest_diff::read_parsed_installed_manifest(installed, entry.path(), digest)
 }
 
 /// The version the incoming package declares, taken from the manifest parsed during inspection.
@@ -348,6 +351,19 @@ fn declared_incoming_version(
         .find(|parsed| &parsed.resource_root == incoming_root)
         .and_then(|parsed| crate::declared_manifest_version(&parsed.manifest))
         .map(str::to_owned)
+}
+
+/// The manifest the incoming package declares, from the parse inspection already did.
+fn parsed_incoming_manifest(
+    report: &crate::FullInspectionReport,
+    incoming_root: &crate::ZipResourceRoot,
+) -> Option<crate::FxManifest> {
+    report
+        .manifests()
+        .resources
+        .iter()
+        .find(|parsed| &parsed.resource_root == incoming_root)
+        .map(|parsed| parsed.manifest.clone())
 }
 
 /// What the installation was installed from before this update, as an apply can still keep it.
@@ -379,6 +395,7 @@ struct PreparedTwoWay {
     txn_root: TrustedTransactionRoot,
     /// Read from the sealed package's manifest during inspection, before anything is written.
     incoming_version: Option<String>,
+    incoming_manifest: Option<crate::FxManifest>,
     /// What the installation was installed from before this, for an undo to put back.
     prior_baseline: Option<PriorBaseline>,
 }
@@ -478,6 +495,7 @@ fn prepare_two_way(
         None => BTreeMap::new(),
     };
     let incoming_version = declared_incoming_version(&report, &selected.incoming_root);
+    let incoming_manifest = parsed_incoming_manifest(&report, &selected.incoming_root);
     let prior_baseline = baseline.map(|(_, _, prior)| prior);
 
     Ok(PreparedTwoWay {
@@ -487,6 +505,7 @@ fn prepare_two_way(
         baseline_documents,
         txn_root,
         incoming_version,
+        incoming_manifest,
         prior_baseline,
     })
 }
@@ -1081,8 +1100,16 @@ pub fn preview_two_way_update(request: TwoWayUpdateRequest<'_>) -> Result<TwoWay
         }
     }
 
-    let installed_version = declared_installed_version(&prepared.plan, &installed_merge);
+    let installed_manifest = read_installed_manifest(&prepared.plan, &installed_merge);
+    let installed_version = installed_manifest
+        .as_ref()
+        .and_then(|manifest| crate::declared_manifest_version(manifest))
+        .map(str::to_owned);
     let incoming_version = prepared.incoming_version.clone();
+    let manifest_changes = match (&installed_manifest, &prepared.incoming_manifest) {
+        (Some(installed), Some(incoming)) => Some(crate::compare_manifests(installed, incoming)),
+        _ => None,
+    };
 
     Ok(TwoWayUpdatePreview {
         plan: prepared.plan,
@@ -1090,6 +1117,7 @@ pub fn preview_two_way_update(request: TwoWayUpdateRequest<'_>) -> Result<TwoWay
         unmergeable,
         installed_version,
         incoming_version,
+        manifest_changes,
     })
 }
 

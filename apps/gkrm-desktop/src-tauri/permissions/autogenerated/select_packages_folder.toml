@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-select-packages-folder"
+description = "Enables the select_packages_folder command without any pre-configured scope."
+commands.allow = ["select_packages_folder"]
+
+[[permission]]
+identifier = "deny-select-packages-folder"
+description = "Denies the select_packages_folder command without any pre-configured scope."
+commands.deny = ["select_packages_folder"]

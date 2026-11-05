@@ -44,7 +44,26 @@ describe('typed tauri client', () => {
   it('normalizes malformed responses to generic errors', async () => {
     invoke.mockResolvedValueOnce({ schemaVersion: 2 })
     await expect(appGetInfo()).rejects.toMatchObject({
-      desktopError: { code: 'internal', message: 'The desktop adapter failed.' },
+      desktopError: {
+        code: 'internal',
+        message: 'Something unexpected went wrong. Check History before trying again.',
+      },
+    })
+  })
+
+  it('keeps the message for a package whose resource is not in the chosen folder', async () => {
+    // A code the frontend does not know decodes to the generic failure, which would hide why.
+    invoke.mockRejectedValueOnce({
+      code: 'package_resource_not_installed',
+      category: 'selection',
+      message: 'This package is for a resource that is not in the folder you chose.',
+      recoverable: true,
+    })
+    await expect(appGetInfo()).rejects.toMatchObject({
+      desktopError: {
+        code: 'package_resource_not_installed',
+        message: 'This package is for a resource that is not in the folder you chose.',
+      },
     })
   })
 

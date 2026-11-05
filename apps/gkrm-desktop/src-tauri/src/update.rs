@@ -122,11 +122,14 @@ fn disposition(action: TwoWayFileAction) -> TwoWayFileDisposition {
         TwoWayFileAction::Unchanged => TwoWayFileDisposition::Unchanged,
         TwoWayFileAction::TakeFromUpdate => TwoWayFileDisposition::TakeFromUpdate,
         TwoWayFileAction::Review => TwoWayFileDisposition::Review,
-        TwoWayFileAction::KeepLocalOnly => TwoWayFileDisposition::KeepLocalOnly,
+        // The screen has one place for a file that stays as the operator has it.
+        TwoWayFileAction::KeepLocalOnly | TwoWayFileAction::KeepYours => {
+            TwoWayFileDisposition::KeepLocalOnly
+        }
     }
 }
 
-fn summarize(plan: &TwoWayUpdatePlan) -> TwoWaySummary {
+pub(crate) fn summarize(plan: &TwoWayUpdatePlan) -> TwoWaySummary {
     let summary = plan.summary();
     TwoWaySummary {
         unchanged: summary.unchanged() as u32,
@@ -323,13 +326,35 @@ pub fn two_way_preview(
         None => None,
     };
 
+    // A package for a resource this folder does not hold cannot be compared, and the comparison
+    // reports that as the files having changed under it. Say what is actually wrong first.
+    if let Some(wanted) = package_resource_name(&package.path) {
+        if let Ok(held) = gkrm_core::scan_installed_resources(
+            &installed.path,
+            gkrm_core::InstalledScanLimits::default(),
+        ) {
+            if !held
+                .resources
+                .iter()
+                .any(|resource| resource.name == wanted)
+            {
+                return Err(DesktopFailure::PackageResourceNotInstalled);
+            }
+        }
+    }
+
     let workspace = resolve_trusted_update_workspace(&app_data_root).map_err(map_core_error)?;
     // What this installation was last updated from, when nobody pointed at a package. After the
     // first update this is the ordinary case: the operator should not have to keep a ZIP to be
     // told which of their own files they edited.
     let remembered = match &baseline {
         Some(_) => None,
-        None => crate::installed_baseline::lookup(&app_data_root, &installed.path),
+        // Asked for by resource as well as root: a folder of many resources is one root, and each
+        // was last updated from its own package. A package that does not name exactly one
+        // resource has no baseline to reach for.
+        None => package_resource_name(&package.path).and_then(|resource| {
+            crate::installed_baseline::lookup(&app_data_root, &installed.path, &resource)
+        }),
     };
     let remembered_id = remembered
         .as_ref()
@@ -427,6 +452,7 @@ pub fn two_way_preview(
         resource,
         installed_version: preview.installed_version().map(str::to_owned),
         incoming_version: preview.incoming_version().map(str::to_owned),
+        manifest_changes: preview.manifest_changes().map(manifest_changes_dto),
         summary,
         files,
         omitted_file_count: plan.entries().len().saturating_sub(listed) as u32,
@@ -434,6 +460,73 @@ pub fn two_way_preview(
         remembered_baseline_version: remembered.as_ref().and_then(|entry| entry.version.clone()),
         used_remembered_baseline: remembered_id.is_some(),
     })
+}
+
+/// The one resource a package carries, by name, when it carries exactly one.
+fn package_resource_name(package: &std::path::Path) -> Option<String> {
+    let report = gkrm_core::inspect_package_resources(
+        package,
+        gkrm_core::PackageResourceInspectionOptions::default(),
+    )
+    .ok()?;
+    match report.resources() {
+        [only] => only.resource_key().map(|key| key.as_str().to_owned()),
+        _ => None,
+    }
+}
+
+/// The most entries one manifest list sends in each direction.
+const MAX_MANIFEST_CHANGE_ENTRIES: usize = 100;
+/// Longer than any path a package can hold; an entry beyond it is counted, not sent.
+const MAX_MANIFEST_ENTRY_CHARS: usize = 512;
+
+pub(crate) fn manifest_changes_dto(
+    changes: &gkrm_core::ManifestChanges,
+) -> crate::dto::ManifestChangesDto {
+    use crate::dto::{ManifestChangeGroup, ManifestChangesDto, ManifestFxVersionChange};
+
+    let mut omitted: usize = 0;
+    let mut bounded = |items: &[String]| -> Vec<String> {
+        let kept: Vec<String> = items
+            .iter()
+            .filter(|item| item.chars().count() <= MAX_MANIFEST_ENTRY_CHARS)
+            .take(MAX_MANIFEST_CHANGE_ENTRIES)
+            .cloned()
+            .collect();
+        omitted += items.len() - kept.len();
+        kept
+    };
+
+    let lists: [(&'static str, &gkrm_core::ListChange); 7] = [
+        ("dependencies", &changes.dependencies),
+        ("client_scripts", &changes.client_scripts),
+        ("server_scripts", &changes.server_scripts),
+        ("shared_scripts", &changes.shared_scripts),
+        ("files", &changes.files),
+        ("ui_pages", &changes.ui_pages),
+        ("escrow_ignore", &changes.escrow_ignore),
+    ];
+    let groups = lists
+        .into_iter()
+        .filter(|(_, change)| !change.is_empty())
+        .map(|(kind, change)| ManifestChangeGroup {
+            kind,
+            added: bounded(&change.added),
+            removed: bounded(&change.removed),
+        })
+        .collect();
+
+    ManifestChangesDto {
+        fx_version: changes
+            .fx_version
+            .as_ref()
+            .map(|change| ManifestFxVersionChange {
+                installed: change.installed.clone(),
+                incoming: change.incoming.clone(),
+            }),
+        groups,
+        omitted_count: omitted as u32,
+    }
 }
 
 /// One file's diff, with both sides of every change and where its ticks start.
@@ -691,24 +784,42 @@ pub fn two_way_apply(
     })
     .map_err(map_apply_core_error)?;
 
+    let summary = summarize(outcome.plan());
+    record_applied_update(&app_data_root, &installed, &outcome, &summary);
+
+    Ok(TwoWayApplyResponse {
+        outcome: outcome.outcome().to_string(),
+        summary,
+    })
+}
+
+/// Keep what the history screen and an undo need about an update that just finished.
+///
+/// Shared by the single-resource and batch updates so both leave the same record behind. Nothing
+/// here can fail the update: it is already committed, and its durable evidence is the workspace's.
+pub(crate) fn record_applied_update(
+    app_data_root: &std::path::Path,
+    installed: &std::path::Path,
+    outcome: &gkrm_core::TwoWayApplyOutcome,
+    summary: &TwoWaySummary,
+) {
     // Remember it, so the history screen can show what was done without asking the operator to
     // point at the folder again. An update that changed nothing is not one of them: a list of
     // non-events is a list nobody reads. A failure to write it is not a failure of the update
     // either — the update is already committed, and its durable evidence is the workspace's.
-    let summary = summarize(outcome.plan());
     if outcome.outcome() != "already_up_to_date" {
         let id = Uuid::new_v4().to_string();
         // What it would take to put this back, filed under the same id. The transaction already
         // holds the content; this is the only record of which file each backed-up object came
         // from, and without it a finished update cannot be undone at all.
         if outcome.outcome() == "committed" {
-            let _ = crate::undo::write(&app_data_root, &undo_record(&id, &installed, &outcome));
+            let _ = crate::undo::write(app_data_root, &undo_record(&id, installed, outcome));
             // What this installation is now installed from, so the next update reaches for it
             // itself. It is a note about the package the workspace already kept; losing it costs
             // the next update its evidence and nothing else.
             if let Some(baseline_id) = outcome.baseline_id() {
                 crate::installed_baseline::record(
-                    &app_data_root,
+                    app_data_root,
                     crate::installed_baseline::InstalledBaseline {
                         installed_root: installed.to_string_lossy().into_owned(),
                         resource: outcome.plan().resource_key().as_str().to_string(),
@@ -719,7 +830,7 @@ pub fn two_way_apply(
             }
         }
         let _ = crate::history::record(
-            &app_data_root,
+            app_data_root,
             crate::history::RecordedUpdate {
                 id: &id,
                 resource: outcome.plan().resource_key().as_str(),
@@ -732,11 +843,6 @@ pub fn two_way_apply(
             },
         );
     }
-
-    Ok(TwoWayApplyResponse {
-        outcome: outcome.outcome().to_string(),
-        summary,
-    })
 }
 
 /// What it would take to put this update back, read off the plan it just applied.

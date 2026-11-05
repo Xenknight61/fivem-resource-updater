@@ -170,6 +170,15 @@ impl TwoWayExecutionDescriptor {
                     summary.keep_local_only += 1;
                     TwoWayFileAction::KeepLocalOnly
                 }
+                5 if item.editable
+                    && installed.is_some()
+                    && incoming.is_some()
+                    && installed != incoming
+                    && item.baseline.is_some() =>
+                {
+                    summary.keep_local_only += 1;
+                    TwoWayFileAction::KeepYours
+                }
                 _ => return Err(invalid()),
             };
             entries.push(TwoWayPlanEntry {

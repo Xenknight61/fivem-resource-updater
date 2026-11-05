@@ -2,6 +2,10 @@ import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 
 import {
   decodeAppInfo,
+  decodeBatchApplyResponse,
+  decodeBatchOpenPackageResponse,
+  decodeBatchPlanResponse,
+  decodeBatchReleaseResponse,
   decodeCreateUpdatePlanResponse,
   decodeDesktopError,
   decodeListSelectionsResponse,
@@ -42,6 +46,13 @@ import {
 } from './decoders'
 import type {
   AppInfo,
+  BatchApplyRequest,
+  BatchApplyResponse,
+  BatchOpenPackageResponse,
+  BatchPlanRequest,
+  BatchPlanResponse,
+  BatchReleaseRequest,
+  BatchReleaseResponse,
   StorageReleaseResponse,
   StorageReportResponse,
   UpdateHistoryListResponse,
@@ -116,6 +127,7 @@ const commands = {
   appGetInfo: 'app_get_info',
   selectInstalledRoot: 'select_installed_root',
   selectPackageFile: 'select_package_file',
+  selectPackagesFolder: 'select_packages_folder',
   sessionListSelections: 'session_list_selections',
   sessionReleaseSelection: 'session_release_selection',
   scanInstalledRoot: 'scan_installed_root',
@@ -133,6 +145,10 @@ const commands = {
   updateTwoWayGetDiff: 'update_two_way_get_diff',
   updateTwoWayApply: 'update_two_way_apply',
   updateTwoWayRelease: 'update_two_way_release',
+  updateBatchPlan: 'update_batch_plan',
+  updateBatchApply: 'update_batch_apply',
+  updateBatchOpenPackage: 'update_batch_open_package',
+  updateBatchRelease: 'update_batch_release',
   storageReport: 'storage_report',
   storageRelease: 'storage_release',
   updateHistoryList: 'update_history_list',
@@ -154,7 +170,7 @@ class TauriClientError extends Error {
 }
 
 function isSelectionKind(value: unknown): value is SelectionKind {
-  return value === 'installedRoot' || value === 'packageFile'
+  return value === 'installedRoot' || value === 'packageFile' || value === 'packagesFolder'
 }
 
 function validateHandle(handle: unknown): handle is string {
@@ -272,6 +288,10 @@ export function selectInstalledRoot(): Promise<SelectionDialogResult> {
 
 export function selectPackageFile(): Promise<SelectionDialogResult> {
   return invokeDecoded(commands.selectPackageFile, {}, decodeSelectionDialogResult)
+}
+
+export function selectPackagesFolder(): Promise<SelectionDialogResult> {
+  return invokeDecoded(commands.selectPackagesFolder, {}, decodeSelectionDialogResult)
 }
 
 export function sessionListSelections(
@@ -512,6 +532,62 @@ export function updateTwoWayRelease(
     commands.updateTwoWayRelease,
     { request: { handle: request.handle } },
     decodeTwoWayReleaseResponse,
+  )
+}
+
+// --- Batch update ------------------------------------------------------------------------------
+
+/** Compare every package in a folder against the installation. Reads only. */
+export function updateBatchPlan(request: BatchPlanRequest): Promise<BatchPlanResponse> {
+  if (
+    !validateHandle(request.installedSelectionHandle) ||
+    !validateHandle(request.packagesSelectionHandle)
+  ) {
+    throw invalidRequestError()
+  }
+  return invokeDecoded(
+    commands.updateBatchPlan,
+    {
+      request: {
+        installedSelectionHandle: request.installedSelectionHandle,
+        packagesSelectionHandle: request.packagesSelectionHandle,
+      },
+    },
+    decodeBatchPlanResponse,
+  )
+}
+
+/** Update every resource that needs no answer. Writes to the installation. */
+export function updateBatchApply(request: BatchApplyRequest): Promise<BatchApplyResponse> {
+  if (!validateHandle(request.handle)) throw invalidRequestError()
+  return invokeDecoded(
+    commands.updateBatchApply,
+    { request: { handle: request.handle } },
+    decodeBatchApplyResponse,
+  )
+}
+
+/** Make one package of a batch selectable on the Update screen. */
+export function updateBatchOpenPackage(request: {
+  handle: string
+  id: number
+}): Promise<BatchOpenPackageResponse> {
+  if (!validateHandle(request.handle) || !Number.isSafeInteger(request.id) || request.id < 0) {
+    throw invalidRequestError()
+  }
+  return invokeDecoded(
+    commands.updateBatchOpenPackage,
+    { request: { handle: request.handle, id: request.id } },
+    decodeBatchOpenPackageResponse,
+  )
+}
+
+export function updateBatchRelease(request: BatchReleaseRequest): Promise<BatchReleaseResponse> {
+  if (!validateHandle(request.handle)) throw invalidRequestError()
+  return invokeDecoded(
+    commands.updateBatchRelease,
+    { request: { handle: request.handle } },
+    decodeBatchReleaseResponse,
   )
 }
 

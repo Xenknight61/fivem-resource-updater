@@ -1,6 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 
 import AboutView from '@/views/AboutView.vue'
+import BatchView from '@/views/BatchView.vue'
 import HistoryView from '@/views/HistoryView.vue'
 import UpdateView from '@/views/UpdateView.vue'
 
@@ -20,6 +21,7 @@ export const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: '/', name: 'update', component: UpdateView },
+    { path: '/batch', name: 'batch', component: BatchView },
     { path: '/history', name: 'history', component: HistoryView },
     { path: '/console', redirect: '/history' },
     { path: '/about', name: 'about', component: AboutView },

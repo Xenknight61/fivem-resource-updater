@@ -208,6 +208,8 @@ export const useSessionStore = defineStore('session', {
       }
     },
     async installCurrentSelection(selection: SelectionSummary) {
+      // A folder of packages belongs to the batch screen, which holds its own selection.
+      if (selection.kind === 'packagesFolder') return
             const sourceMutationToken = this.beginSourceMutation()
       if (sourceMutationToken === undefined) {
         await this.releasePreviousSelection(selection.handle)
@@ -230,7 +232,10 @@ export const useSessionStore = defineStore('session', {
         this.endSourceMutation(sourceMutationToken)
       }
     },
-    async invalidateSelectionKind(kind: SelectionKind, existingSourceMutationToken?: number): Promise<boolean> {
+    async invalidateSelectionKind(
+      kind: Exclude<SelectionKind, 'packagesFolder'>,
+      existingSourceMutationToken?: number,
+    ): Promise<boolean> {
             const sourceMutationToken = this.beginSourceMutation(existingSourceMutationToken)
       if (sourceMutationToken === undefined) return false
       const ownsSourceMutation = existingSourceMutationToken === undefined

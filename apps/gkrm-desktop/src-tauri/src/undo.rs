@@ -143,36 +143,106 @@ pub enum UndoHistoryStatus {
 /// Durable core evidence determines availability and completed history. The JSON
 /// record only locates the parent and selected installation.
 pub fn history_status(app_data_root: &Path, id: &str) -> UndoHistoryStatus {
-    let inspect = || -> Option<UndoHistoryStatus> {
-        let record = read(app_data_root, id)?;
-        let transaction =
-            gkrm_core::Sha256Digest::from_lowercase_hex(record.transaction_id.as_deref()?).ok()?;
-        let workspace = gkrm_core::open_existing_trusted_update_workspace(app_data_root).ok()??;
-        let root = Path::new(&record.installed_root);
-        if !root.is_absolute() {
-            return None;
-        }
-        let key = gkrm_core::SafeResourceKey::parse(&record.resource).ok()?;
-        let selection = gkrm_core::scan_trusted_installed_recovery_resources(
-            root,
-            gkrm_core::InstalledScanLimits::default(),
-        )
-        .ok()?
-        .select(&key)
-        .ok()?;
-        let receipts = gkrm_core::inspect_trusted_undo_receipts(&workspace, &selection).ok()?;
-        if let Some(receipt) = receipts
-            .iter()
-            .find(|receipt| receipt.parent_transaction_id() == &transaction)
-        {
-            return Some(UndoHistoryStatus::Completed {
-                preserved: receipt.preserved_changes(),
-            });
-        }
-        gkrm_core::TrustedUndoSource::try_open(&workspace, &selection, &transaction).ok()?;
-        Some(UndoHistoryStatus::Available)
+    history_statuses(app_data_root, &[id.to_owned()])
+        .pop()
+        .unwrap_or(UndoHistoryStatus::Unavailable)
+}
+
+/// What each of several updates can still do, read from the same durable evidence.
+///
+/// The History list asks about every row. Each answer needs the workspace opened, the
+/// installation scanned and the resource's receipts read, and doing that afresh per row made a
+/// list of fourteen updates take seven seconds. Rows for one resource in one installation share
+/// all of it, so it is read once per resource — and the resources are read side by side, because
+/// none of it writes. The answers are the same as one at a time: each still comes from the
+/// evidence, and nothing is remembered between calls.
+pub fn history_statuses(app_data_root: &Path, ids: &[String]) -> Vec<UndoHistoryStatus> {
+    use std::collections::BTreeMap;
+
+    let mut results = vec![UndoHistoryStatus::Unavailable; ids.len()];
+    let Some(workspace) = gkrm_core::open_existing_trusted_update_workspace(app_data_root)
+        .ok()
+        .flatten()
+    else {
+        return results;
     };
-    inspect().unwrap_or(UndoHistoryStatus::Unavailable)
+
+    // Rows grouped by the resource they are about.
+    let mut groups: BTreeMap<(String, String), Vec<(usize, UndoRecord)>> = BTreeMap::new();
+    for (index, id) in ids.iter().enumerate() {
+        if let Some(record) = read(app_data_root, id) {
+            groups
+                .entry((record.installed_root.clone(), record.resource.clone()))
+                .or_default()
+                .push((index, record));
+        }
+    }
+
+    let workspace = &workspace;
+    let answered: Vec<(usize, UndoHistoryStatus)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = groups
+            .into_iter()
+            .map(|((installed_root, resource), rows)| {
+                scope.spawn(move || {
+                    let root = Path::new(&installed_root);
+                    // One scan and one read of the receipts for every row of this resource.
+                    let located = || {
+                        if !root.is_absolute() {
+                            return None;
+                        }
+                        let key = gkrm_core::SafeResourceKey::parse(&resource).ok()?;
+                        let selection = gkrm_core::scan_trusted_installed_recovery_resources(
+                            root,
+                            gkrm_core::InstalledScanLimits::default(),
+                        )
+                        .ok()?
+                        .select(&key)
+                        .ok()?;
+                        let receipts =
+                            gkrm_core::inspect_trusted_undo_receipts(workspace, &selection).ok()?;
+                        Some((selection, receipts))
+                    };
+                    let located = located();
+                    rows.into_iter()
+                        .map(|(index, record)| {
+                            let status = (|| -> Option<UndoHistoryStatus> {
+                                let transaction = gkrm_core::Sha256Digest::from_lowercase_hex(
+                                    record.transaction_id.as_deref()?,
+                                )
+                                .ok()?;
+                                let (selection, receipts) = located.as_ref()?;
+                                if let Some(receipt) = receipts
+                                    .iter()
+                                    .find(|receipt| receipt.parent_transaction_id() == &transaction)
+                                {
+                                    return Some(UndoHistoryStatus::Completed {
+                                        preserved: receipt.preserved_changes(),
+                                    });
+                                }
+                                gkrm_core::TrustedUndoSource::try_open(
+                                    workspace,
+                                    selection,
+                                    &transaction,
+                                )
+                                .ok()?;
+                                Some(UndoHistoryStatus::Available)
+                            })()
+                            .unwrap_or(UndoHistoryStatus::Unavailable);
+                            (index, status)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap_or_default())
+            .collect()
+    });
+    for (index, status) in answered {
+        results[index] = status;
+    }
+    results
 }
 
 /// Give back the locator for a committed update this has no record of.
@@ -342,7 +412,11 @@ pub fn undo(
             },
         );
     } else {
-        crate::installed_baseline::forget(workspace.app_root(), &record.installed_root);
+        crate::installed_baseline::forget(
+            workspace.app_root(),
+            &record.installed_root,
+            &record.resource,
+        );
     }
     // Keep the locator and all core evidence until durable Undo receipts reconcile it.
     Ok(outcome)
@@ -522,7 +596,8 @@ mod tests {
         std::fs::remove_file(temp.path().join("prior.zip")).unwrap();
         std::fs::remove_file(temp.path().join("update.zip")).unwrap();
         undo(&workspace, &record).unwrap();
-        let remembered = crate::installed_baseline::lookup(workspace.app_root(), root).unwrap();
+        let remembered =
+            crate::installed_baseline::lookup(workspace.app_root(), root, "gksphone").unwrap();
         assert_eq!(remembered.baseline_id, prior.baseline_id().as_str());
         assert_eq!(remembered.version.as_deref(), prior.resource_version());
     }
@@ -571,7 +646,8 @@ mod tests {
             .is_dir());
         assert!(crate::installed_baseline::lookup(
             workspace.app_root(),
-            Path::new(&record.installed_root)
+            Path::new(&record.installed_root),
+            &record.resource,
         )
         .is_none());
     }

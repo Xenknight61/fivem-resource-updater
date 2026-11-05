@@ -1,4 +1,4 @@
-export type SelectionKind = 'installedRoot' | 'packageFile'
+export type SelectionKind = 'installedRoot' | 'packageFile' | 'packagesFolder'
 
 export interface AppInfo {
   schemaVersion: 1
@@ -51,6 +51,7 @@ export type DesktopErrorCode =
   | 'scan_failed'
   | 'invalid_scan_source'
   | 'resource_not_found'
+  | 'package_resource_not_installed'
   | 'inspection_rejected'
   | 'selection_busy'
   | 'planning_busy'
@@ -663,12 +664,36 @@ export interface TwoWaySummary {
   total: number
 }
 
+export type ManifestChangeKind =
+  | 'dependencies'
+  | 'client_scripts'
+  | 'server_scripts'
+  | 'shared_scripts'
+  | 'files'
+  | 'ui_pages'
+  | 'escrow_ignore'
+
+export interface ManifestChangeGroup {
+  kind: ManifestChangeKind
+  added: string[]
+  removed: string[]
+}
+
+export interface ManifestChanges {
+  fxVersion?: { installed?: string; incoming?: string }
+  groups: ManifestChangeGroup[]
+  /** Entries beyond the per-list cap, so a long list is not read as a complete one. */
+  omittedCount: number
+}
+
 export interface TwoWayPreviewResponse {
   handle: string
   resource: string
   /** The version each side's manifest declares, when it declares exactly one. */
   installedVersion?: string
   incomingVersion?: string
+  /** What the manifests differ in. Absent when either could not be read. */
+  manifestChanges?: ManifestChanges
   summary: TwoWaySummary
   files: TwoWayFile[]
   omittedFileCount: number
@@ -821,4 +846,77 @@ export interface UpdateHistoryUndoResponse {
   unchanged: number
   skipped: number
   missing: number
+}
+
+// --- Batch update: a folder of packages against one installation ------------------------------
+
+export interface BatchPlanRequest {
+  installedSelectionHandle: string
+  packagesSelectionHandle: string
+}
+
+/** What the batch found out about one package. */
+export type BatchEntryKind =
+  | 'ready'
+  | 'up_to_date'
+  | 'needs_review'
+  | 'no_installed_resource'
+  | 'duplicate_package'
+  | 'not_a_single_resource'
+  | 'blocked_by_earlier_update'
+  | 'unreadable'
+
+export interface BatchEntry {
+  /** Position in the plan. An entry is named by this and nothing else. */
+  id: number
+  /** The package's file name. Never a path. */
+  packageName: string
+  /** The resource the package carries, when it could be told. */
+  resource?: string
+  kind: BatchEntryKind
+  /** Files that differ on both sides. */
+  review: number
+  /** Editable files that differ but cannot be compared line by line. */
+  unmergeable: number
+  installedVersion?: string
+  incomingVersion?: string
+  summary?: TwoWaySummary
+  manifestChanges?: ManifestChanges
+}
+
+export interface BatchPlanResponse {
+  handle: string
+  entries: BatchEntry[]
+  /** How many entries applying would write. */
+  readyCount: number
+}
+
+export interface BatchApplyRequest {
+  handle: string
+}
+
+export type BatchApplyResultKind = 'committed' | 'skipped' | 'failed' | 'not_attempted'
+
+export interface BatchEntryResult {
+  id: number
+  result: BatchApplyResultKind
+}
+
+export interface BatchApplyResponse {
+  results: BatchEntryResult[]
+  committedCount: number
+}
+
+/** The two selections the Update screen needs to review one package of a batch. */
+export interface BatchOpenPackageResponse {
+  package: SelectionSummary
+  installed: SelectionSummary
+}
+
+export interface BatchReleaseRequest {
+  handle: string
+}
+
+export interface BatchReleaseResponse {
+  released: boolean
 }

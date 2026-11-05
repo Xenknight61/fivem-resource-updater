@@ -163,6 +163,50 @@ describe('the update screen', () => {
     wrapper.unmount()
   })
 
+  it('lets go of the selection it replaces, so the backend never runs out of them', async () => {
+    // Every folder or ZIP picked takes one of a fixed number of backend selections. Never
+    // releasing the old ones meant sixteen picks and then "the selection limit has been reached".
+    let next = 0
+    const handle = () => `123e4567-e89b-42d3-a456-4266141740${String(10 + next++).padStart(2, '0')}`
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'select_installed_root') {
+        return { cancelled: false, selection: { handle: handle(), kind: 'installedRoot', displayLabel: 'resources' } }
+      }
+      if (command === 'select_package_file') {
+        return { cancelled: false, selection: { handle: handle(), kind: 'packageFile', displayLabel: 'one.zip' } }
+      }
+      if (command === 'session_release_selection') return { released: true }
+      return defaultInvoke(command)
+    })
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    const first = store.package?.handle
+    await store.choosePackage()
+    await store.choosePackage()
+
+    const released = invoke.mock.calls
+      .filter(([command]) => command === 'session_release_selection')
+      .map(([, args]) => (args as { request: { handle: string } }).request.handle)
+    expect(released).toHaveLength(2)
+    expect(released).toContain(first)
+    // The one in use is never released.
+    expect(released).not.toContain(store.package?.handle)
+    expect(released).not.toContain(store.folder?.handle)
+  })
+
+  it('lets go of everything it holds when it is reset', async () => {
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    const held = [store.folder?.handle, store.package?.handle]
+    await store.reset()
+    const released = invoke.mock.calls
+      .filter(([command]) => command === 'session_release_selection')
+      .map(([, args]) => (args as { request: { handle: string } }).request.handle)
+    expect(released.sort()).toEqual(held.sort())
+  })
+
   it('asks for a folder and a package before it will compare', async () => {
     const wrapper = mount(UpdateView)
     expect(button(wrapper, 'Compare')?.attributes('disabled')).toBeDefined()
@@ -617,7 +661,7 @@ describe('the update screen', () => {
     expect(named).toEqual(['config.lua', 'server/settings.lua'])
     expect(wrapper.text()).toContain("2 files take the update's version")
 
-    await button(wrapper, 'Back to the list')?.trigger('click')
+    await button(wrapper, 'Back — nothing is written')?.trigger('click')
     await flushPromises()
     expect(store.confirming).toBe(false)
     // Backing out changed nothing: the ticks are as they were, and nothing was written.
@@ -815,6 +859,154 @@ describe('the update screen', () => {
     expect(store.blocked).toBe('finishable')
     expect(wrapper.text()).toContain('still on record')
     expect(button(wrapper, 'Close previous update')).toBeDefined()
+  })
+
+  it('does not offer to apply while an earlier update is still on record, and says why', async () => {
+    // Comparing another resource is allowed while an earlier update is on record, but writing is
+    // not. The button used to open a confirmation whose last step quietly did nothing.
+    overview = {
+      disposition: 'attention_required',
+      activeRecovery: false,
+      terminalEvidence: true,
+      manualAttention: false,
+      unsupportedEvidence: false,
+    }
+    const wrapper = mount(UpdateView)
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    await store.compare()
+    // What a refused comparison of the first resource leaves behind, then a comparison of another
+    // one that the per-resource check lets through.
+    await store.checkPreviousUpdate()
+    await flushPromises()
+    expect(store.preview).toBeDefined()
+    expect(store.blocked).toBe('finishable')
+
+    expect(button(wrapper, 'Review update')?.attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.actions').text()).toContain('Close the previous update')
+    await store.requestApply()
+    expect(store.confirming).toBe(false)
+  })
+
+  it('knows an earlier update is on record as soon as it has compared, without being asked twice', async () => {
+    // What "Review in Update" from the batch screen lands on: a comparison of another resource
+    // while the batch's own updates are still open. The screen has to say so straight away.
+    overview = {
+      disposition: 'attention_required',
+      activeRecovery: false,
+      terminalEvidence: true,
+      manualAttention: false,
+      unsupportedEvidence: false,
+    }
+    const wrapper = mount(UpdateView)
+    const recovery = useRecoveryStore()
+    await recovery.refreshOverview()
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    invoke.mockClear()
+    await store.compare()
+    await flushPromises()
+
+    expect(store.preview).toBeDefined()
+    expect(store.blocked).toBe('finishable')
+    expect(button(wrapper, 'Review update')?.attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('still on record')
+    // It read what the screen already knew rather than asking the workspace again.
+    expect(invoke.mock.calls.filter(([c]) => c === 'update_recovery_overview')).toHaveLength(0)
+  })
+
+  it('never leaves the confirmation open and silent when the workspace is not clear at apply time', async () => {
+    const wrapper = mount(UpdateView)
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    await store.compare()
+    await flushPromises()
+    await store.requestApply()
+    expect(store.confirming).toBe(true)
+
+    // An earlier update lands on record after the confirmation was opened.
+    overview = {
+      disposition: 'attention_required',
+      activeRecovery: false,
+      terminalEvidence: true,
+      manualAttention: false,
+      unsupportedEvidence: false,
+    }
+    useRecoveryStore().overviewPhase = 'unknown'
+    await store.apply()
+    await flushPromises()
+
+    expect(store.confirming).toBe(false)
+    expect(store.blocked).toBe('finishable')
+    expect(invoke.mock.calls.some(([command]) => command === 'update_two_way_apply')).toBe(false)
+    expect(wrapper.text()).toContain('still on record')
+  })
+
+  it('asks whether to close a finished update on the way to another resource', async () => {
+    const wrapper = mount(UpdateView, { attachTo: document.body })
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    await store.compare()
+    await flushPromises()
+    // A committed update leaves its record behind until it is closed.
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'update_two_way_apply') {
+        overview = {
+          disposition: 'attention_required',
+          activeRecovery: false,
+          terminalEvidence: true,
+          manualAttention: false,
+          unsupportedEvidence: false,
+        }
+      }
+      return defaultInvoke(command)
+    })
+    await store.requestApply()
+    await store.apply()
+    await flushPromises()
+    expect(store.blocked).toBe('finishable')
+
+    await button(wrapper, 'Change sources')?.trigger('click')
+    await flushPromises()
+    const dialog = wrapper.find('[role="dialog"]')
+    expect(dialog.text()).toContain('Close this update before you go on?')
+    // Asking changes nothing: the preview is still there and nothing was closed.
+    expect(store.preview).toBeDefined()
+    expect(invoke.mock.calls.some(([c]) => c === 'update_recovery_retire_terminal')).toBe(false)
+
+    // "Stay here" leaves everything as it was.
+    await button(dialog, 'Stay here')?.trigger('click')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(store.preview).toBeDefined()
+
+    // "Close it and continue" closes it, keeps nothing open, and goes back to choosing.
+    await button(wrapper, 'Change sources')?.trigger('click')
+    await flushPromises()
+    await button(wrapper.find('[role="dialog"]'), 'Close it and continue')?.trigger('click')
+    await flushPromises()
+    expect(invoke.mock.calls.some(([c]) => c === 'update_recovery_retire_terminal')).toBe(true)
+    expect(store.preview).toBeUndefined()
+    expect(store.blocked).toBe('none')
+    // It did not compare again: the sources are about to change.
+    expect(invoke.mock.calls.filter(([c]) => c === 'update_two_way_preview')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('goes straight back to choosing sources when nothing is open', async () => {
+    const wrapper = mount(UpdateView)
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    await store.compare()
+    await flushPromises()
+    await button(wrapper, 'Change sources')?.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(store.preview).toBeUndefined()
   })
 
   it('sends the operator to recovery when the previous update did not finish', async () => {
@@ -1022,6 +1214,76 @@ describe('the update screen', () => {
     expect(wrapper.text()).toContain('the one already installed')
     // It is a caution, not a refusal: shipping a fix without moving the number is real work.
     expect(button(wrapper, 'Review update')).toBeDefined()
+  })
+
+  async function mountWithPreview(response: unknown) {
+    invoke.mockImplementation(async (command: string) => {
+      switch (command) {
+        case 'select_installed_root':
+          return { cancelled: false, selection: { handle: FOLDER, kind: 'installedRoot', displayLabel: 'resources' } }
+        case 'select_package_file':
+          return { cancelled: false, selection: { handle: PACKAGE, kind: 'packageFile', displayLabel: 'z.zip' } }
+        case 'update_two_way_preview':
+          return response
+        case 'update_two_way_get_diff':
+          return diff
+        case 'update_two_way_release':
+          return { released: true }
+        default:
+          throw { code: 'internal', category: 'internal', message: 'x', recoverable: false }
+      }
+    })
+    const wrapper = mount(UpdateView)
+    const store = useUpdateStore()
+    await store.chooseFolder()
+    await store.choosePackage()
+    await store.compare()
+    await flushPromises()
+    return { wrapper, store }
+  }
+
+  it('lists what the manifest adds and removes before anything is applied', async () => {
+    const { wrapper } = await mountWithPreview({
+      ...preview,
+      manifestChanges: {
+        fxVersion: { installed: 'adamant', incoming: 'cerulean' },
+        groups: [
+          { kind: 'dependencies', added: ['ox_lib'], removed: [] },
+          { kind: 'client_scripts', added: ['client/new_feature.lua'], removed: ['client/old.lua'] },
+        ],
+        omittedCount: 0,
+      },
+    })
+
+    const text = wrapper.text()
+    expect(text).toContain('Manifest changes · 3 declarations')
+    expect(text).toContain('adamant → cerulean')
+    expect(text).toContain('ox_lib')
+    expect(text).toContain('client/new_feature.lua')
+    expect(text).toContain('client/old.lua')
+  })
+
+  it('shows no manifest section when the manifests do not differ or could not be read', async () => {
+    const same = await mountWithPreview({
+      ...preview,
+      manifestChanges: { groups: [], omittedCount: 0 },
+    })
+    expect(same.wrapper.text()).not.toContain('Manifest changes')
+    same.wrapper.unmount()
+
+    const unread = await mountWithPreview(preview)
+    expect(unread.wrapper.text()).not.toContain('Manifest changes')
+  })
+
+  it('refuses a manifest change group it does not recognise', async () => {
+    const { store } = await mountWithPreview({
+      ...preview,
+      manifestChanges: {
+        groups: [{ kind: 'something_else', added: ['x'], removed: [] }],
+        omittedCount: 0,
+      },
+    })
+    expect(store.preview).toBeUndefined()
   })
 
   it('says nothing about versions when a manifest declares none', async () => {

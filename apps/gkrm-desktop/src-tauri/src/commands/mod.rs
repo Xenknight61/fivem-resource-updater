@@ -4,6 +4,7 @@ use gkrm_core::resolve_trusted_update_workspace;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::batch::{batch_apply, batch_open_package, batch_plan, batch_release};
 use crate::dto::{
     AppInfo, BuildProfile, ListSelectionsRequest, ListSelectionsResponse, Platform,
     ReleaseSelectionRequest, ReleaseSelectionResponse, ScanGetResourceDetailRequest,
@@ -17,6 +18,8 @@ use crate::dto::{
     UpdateRecoveryStatusRequest, UpdateRecoveryStatusResponse,
 };
 use crate::dto::{
+    BatchApplyRequest, BatchApplyResponse, BatchOpenPackageRequest, BatchOpenPackageResponse,
+    BatchPlanRequest, BatchPlanResponse, BatchReleaseRequest, BatchReleaseResponse,
     HeldBaselineDto, StorageReleaseResponse, StorageReportResponse, TwoWayApplyRequestDto,
     TwoWayApplyResponse, TwoWayGetDiffRequest, TwoWayGetDiffResponse, TwoWayPreviewRequest,
     TwoWayPreviewResponse, TwoWayReleaseRequest, TwoWayReleaseResponse, UpdateHistoryEntryDto,
@@ -42,6 +45,7 @@ use crate::update::{two_way_apply, two_way_get_diff, two_way_preview, two_way_re
 trait SelectionDialog {
     fn pick_installed_root(&self) -> DesktopResult<Option<PathBuf>>;
     fn pick_package_file(&self) -> DesktopResult<Option<PathBuf>>;
+    fn pick_packages_folder(&self) -> DesktopResult<Option<PathBuf>>;
 }
 
 struct TauriSelectionDialog<'a> {
@@ -66,6 +70,16 @@ impl SelectionDialog for TauriSelectionDialog<'_> {
             .set_title("Select update package")
             .add_filter("ZIP package", &["zip"])
             .blocking_pick_file()
+            .map(|path| path.into_path().map_err(|_| DesktopFailure::DialogFailed))
+            .transpose()
+    }
+
+    fn pick_packages_folder(&self) -> DesktopResult<Option<PathBuf>> {
+        self.app
+            .dialog()
+            .file()
+            .set_title("Select the folder with your update packages")
+            .blocking_pick_folder()
             .map(|path| path.into_path().map_err(|_| DesktopFailure::DialogFailed))
             .transpose()
     }
@@ -98,6 +112,15 @@ pub fn select_package_file(
 ) -> Result<SelectionDialogResult, DesktopError> {
     let dialog = TauriSelectionDialog { app: &app };
     select_with_dialog(&dialog, &state, SelectionKind::PackageFile).map_err(DesktopFailure::dto)
+}
+
+#[tauri::command]
+pub fn select_packages_folder(
+    app: AppHandle,
+    state: State<'_, DesktopAppState>,
+) -> Result<SelectionDialogResult, DesktopError> {
+    let dialog = TauriSelectionDialog { app: &app };
+    select_with_dialog(&dialog, &state, SelectionKind::PackagesFolder).map_err(DesktopFailure::dto)
 }
 
 #[tauri::command]
@@ -295,6 +318,7 @@ async fn start_scan(
                 SelectionKind::PackageFile => {
                     build_package_scan_record(source_label, selection_ref, path, &mut generator)
                 }
+                SelectionKind::PackagesFolder => Err(DesktopFailure::InvalidScanSource),
             }
         },
     )
@@ -324,6 +348,7 @@ async fn start_scan_with_builder(
     let source_kind = match expected {
         SelectionKind::InstalledRoot => ScanSourceKind::InstalledRoot,
         SelectionKind::PackageFile => ScanSourceKind::PackageFile,
+        SelectionKind::PackagesFolder => return Err(DesktopFailure::InvalidScanSource.dto()),
     };
     let selection_ref = SelectionReference {
         selection_handle: input.handle().as_str().to_owned(),
@@ -466,33 +491,103 @@ pub fn update_two_way_release(
     two_way_release(&state, &request.handle).map_err(DesktopFailure::dto)
 }
 
-/// The updates this operator has run. A convenience index, not authority for anything.
+/// Compare every package in a folder against the installation. Reads only.
 #[tauri::command]
-pub fn update_history_list(app: AppHandle) -> Result<UpdateHistoryListResponse, DesktopError> {
+pub async fn update_batch_plan(
+    app: AppHandle,
+    state: State<'_, DesktopAppState>,
+    request: BatchPlanRequest,
+) -> Result<BatchPlanResponse, DesktopError> {
     let app_data_root = app
         .path()
         .app_data_dir()
         .map_err(|_| DesktopFailure::Internal.dto())?;
-    Ok(UpdateHistoryListResponse {
-        entries: crate::history::list(&app_data_root)
-            .into_iter()
-            .map(|mut entry| {
-                let status = crate::undo::history_status(&app_data_root, &entry.id);
-                if let crate::undo::UndoHistoryStatus::Completed { preserved } = status {
-                    entry.outcome = if preserved == 0 {
-                        "undone"
-                    } else {
-                        "undone_partial"
+    let started = std::time::Instant::now();
+    let result = batch_plan(
+        &state,
+        &request.installed_selection_handle,
+        &request.packages_selection_handle,
+        app_data_root,
+    );
+    note("batch compare", started, &result, |plan| {
+        format!(
+            "{} packages, {} ready",
+            plan.entries.len(),
+            plan.ready_count
+        )
+    });
+    result.map_err(DesktopFailure::dto)
+}
+
+/// Update every resource that needs no answer. This writes to the live installation.
+#[tauri::command]
+pub async fn update_batch_apply(
+    state: State<'_, DesktopAppState>,
+    request: BatchApplyRequest,
+) -> Result<BatchApplyResponse, DesktopError> {
+    let started = std::time::Instant::now();
+    let result = batch_apply(&state, &request.handle);
+    note("batch apply", started, &result, |applied| {
+        format!("{} updated", applied.committed_count)
+    });
+    result.map_err(DesktopFailure::dto)
+}
+
+#[tauri::command]
+pub fn update_batch_open_package(
+    state: State<'_, DesktopAppState>,
+    request: BatchOpenPackageRequest,
+) -> Result<BatchOpenPackageResponse, DesktopError> {
+    batch_open_package(&state, &request.handle, request.id).map_err(DesktopFailure::dto)
+}
+
+#[tauri::command]
+pub fn update_batch_release(
+    state: State<'_, DesktopAppState>,
+    request: BatchReleaseRequest,
+) -> Result<BatchReleaseResponse, DesktopError> {
+    batch_release(&state, &request.handle).map_err(DesktopFailure::dto)
+}
+
+/// The updates this operator has run. A convenience index, not authority for anything.
+///
+/// Reading what each can still do takes a moment, so it is done off the thread that draws the
+/// window: the window stays responsive while the list fills in.
+#[tauri::command]
+pub async fn update_history_list(
+    app: AppHandle,
+) -> Result<UpdateHistoryListResponse, DesktopError> {
+    let app_data_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| DesktopFailure::Internal.dto())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let entries = crate::history::list(&app_data_root);
+        let ids: Vec<String> = entries.iter().map(|entry| entry.id.clone()).collect();
+        let statuses = crate::undo::history_statuses(&app_data_root, &ids);
+        UpdateHistoryListResponse {
+            entries: entries
+                .into_iter()
+                .zip(statuses)
+                .map(|(mut entry, status)| {
+                    if let crate::undo::UndoHistoryStatus::Completed { preserved } = status {
+                        entry.outcome = if preserved == 0 {
+                            "undone"
+                        } else {
+                            "undone_partial"
+                        }
+                        .to_owned();
                     }
-                    .to_owned();
-                }
-                UpdateHistoryEntryDto {
-                    undoable: status == crate::undo::UndoHistoryStatus::Available,
-                    entry,
-                }
-            })
-            .collect(),
+                    UpdateHistoryEntryDto {
+                        undoable: status == crate::undo::UndoHistoryStatus::Available,
+                        entry,
+                    }
+                })
+                .collect(),
+        }
     })
+    .await
+    .map_err(|_| DesktopFailure::Internal.dto())
 }
 
 /// What is kept so later updates can tell the operator's work from the developer's.
@@ -637,6 +732,7 @@ fn select_with_dialog(
     let path = match kind {
         SelectionKind::InstalledRoot => dialog.pick_installed_root()?,
         SelectionKind::PackageFile => dialog.pick_package_file()?,
+        SelectionKind::PackagesFolder => dialog.pick_packages_folder()?,
     };
     let Some(path) = path else {
         return Ok(SelectionDialogResult {
@@ -698,6 +794,10 @@ mod tests {
 
         fn pick_package_file(&self) -> DesktopResult<Option<PathBuf>> {
             self.package.clone()
+        }
+
+        fn pick_packages_folder(&self) -> DesktopResult<Option<PathBuf>> {
+            Ok(None)
         }
     }
 
@@ -831,6 +931,7 @@ mod tests {
                                 path,
                                 &mut generator,
                             ),
+                            SelectionKind::PackagesFolder => unreachable!("not scanned"),
                         }
                     },
                 )
@@ -906,6 +1007,7 @@ mod tests {
                             match expected {
                                 SelectionKind::InstalledRoot => ScanSourceKind::InstalledRoot,
                                 SelectionKind::PackageFile => ScanSourceKind::PackageFile,
+                                SelectionKind::PackagesFolder => unreachable!("not scanned"),
                             },
                         ))
                     },
@@ -932,6 +1034,7 @@ mod tests {
                         match expected {
                             SelectionKind::InstalledRoot => ScanSourceKind::InstalledRoot,
                             SelectionKind::PackageFile => ScanSourceKind::PackageFile,
+                            SelectionKind::PackagesFolder => unreachable!("not scanned"),
                         },
                     ))
                 },

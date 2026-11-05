@@ -365,3 +365,113 @@ fn inspection_failure_exits_three_with_empty_stdout() {
         "error[unsafe_zip_entry]: ZIP contains an unsafe path."
     );
 }
+
+fn manifest_fixture(
+    installed_manifest: &[u8],
+    incoming_manifest: &[u8],
+) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let temp = tempdir().expect("temp dir should be created");
+    let installed = temp.path().join("resources");
+    write_file(&installed.join("res/fxmanifest.lua"), installed_manifest);
+    write_file(&installed.join("res/a.lua"), b"a");
+    let package = temp.path().join("update.zip");
+    write_zip(
+        &package,
+        &[
+            ("res/fxmanifest.lua", incoming_manifest),
+            ("res/a.lua", b"a"),
+        ],
+    );
+    (temp, installed, package)
+}
+
+fn plan_json(installed: &Path, package: &Path) -> Value {
+    let output = run_plan(installed, package, "json");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("plan output is JSON")
+}
+
+#[test]
+fn manifest_changes_are_reported_in_text_and_json_without_touching_the_installation() {
+    let (_temp, installed, package) = manifest_fixture(
+        b"fx_version 'adamant'\nserver_scripts { 'a.lua' }\n",
+        b"fx_version 'cerulean'\nserver_scripts { 'a.lua', 'b.lua' }\ndependency 'ox_lib'\n",
+    );
+    let before = snapshot_files(&installed);
+
+    let text = run_plan(&installed, &package, "text");
+    assert!(text.status.success());
+    let text = String::from_utf8(text.stdout).expect("UTF-8");
+    assert!(text.contains("Manifest changes"), "{text}");
+    assert!(text.contains("fx_version: adamant -> cerulean"), "{text}");
+    assert!(text.contains("+ b.lua"), "{text}");
+    assert!(text.contains("+ ox_lib"), "{text}");
+
+    let json = plan_json(&installed, &package);
+    let changes = &json["resources"][0]["manifest_changes"];
+    assert_eq!(changes["fx_version"]["installed"], "adamant");
+    assert_eq!(changes["fx_version"]["incoming"], "cerulean");
+    let lists: Vec<(&str, Vec<&str>)> = changes["lists"]
+        .as_array()
+        .expect("lists")
+        .iter()
+        .map(|list| {
+            (
+                list["declaration"].as_str().expect("declaration"),
+                list["added"]
+                    .as_array()
+                    .expect("added")
+                    .iter()
+                    .map(|v| v.as_str().expect("entry"))
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        lists,
+        vec![
+            ("dependencies", vec!["ox_lib"]),
+            ("server_scripts", vec!["b.lua"])
+        ]
+    );
+
+    assert_eq!(snapshot_files(&installed), before);
+}
+
+#[test]
+fn identical_manifests_say_so_without_printing_a_section() {
+    let manifest = b"fx_version 'cerulean'\n";
+    let (_temp, installed, package) = manifest_fixture(manifest, manifest);
+
+    let text = String::from_utf8(run_plan(&installed, &package, "text").stdout).expect("UTF-8");
+    assert!(!text.contains("Manifest changes"), "{text}");
+
+    // Compared and found equal is not the same as not compared: the field is present and empty.
+    let json = plan_json(&installed, &package);
+    let changes = &json["resources"][0]["manifest_changes"];
+    assert!(changes.is_object(), "{changes}");
+    assert_eq!(changes["lists"].as_array().expect("lists").len(), 0);
+    assert!(changes.get("fx_version").is_none());
+}
+
+#[test]
+fn an_unreadable_installed_manifest_omits_the_field_rather_than_claiming_no_change() {
+    // An installed manifest that does not parse leaves nothing honest to compare against.
+    let (_temp, installed, package) =
+        manifest_fixture(b"this is ( not lua", b"fx_version 'cerulean'\n");
+
+    let json = plan_json(&installed, &package);
+    let resource = &json["resources"][0];
+    // The plan itself still succeeds and still lists the files; only the comparison is withheld.
+    assert!(resource["files"]
+        .as_array()
+        .is_some_and(|files| !files.is_empty()));
+    assert!(resource.get("manifest_changes").is_none(), "{resource}");
+
+    let text = String::from_utf8(run_plan(&installed, &package, "text").stdout).expect("UTF-8");
+    assert!(!text.contains("Manifest changes"), "{text}");
+}

@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod commands;
 pub mod diagnostics;
 pub mod dto;
@@ -6,6 +7,8 @@ pub mod history;
 pub mod installed_baseline;
 #[cfg(test)]
 mod lifecycle_tests;
+#[cfg(test)]
+mod matrix_tests;
 pub mod operation;
 pub mod recovery;
 pub mod scan;
@@ -18,8 +21,9 @@ pub mod update;
 use commands::{
     app_get_info, scan_get_resource_detail, scan_get_summary, scan_installed_root,
     scan_list_resources, scan_release, select_installed_root, select_package_file,
-    session_list_selections, session_release_selection, storage_release, storage_report,
-    update_history_list, update_history_undo, update_recovery_execute,
+    select_packages_folder, session_list_selections, session_release_selection, storage_release,
+    storage_report, update_batch_apply, update_batch_open_package, update_batch_plan,
+    update_batch_release, update_history_list, update_history_undo, update_recovery_execute,
     update_recovery_list_candidates, update_recovery_overview, update_recovery_release,
     update_recovery_retire_terminal, update_recovery_status, update_two_way_apply,
     update_two_way_get_diff, update_two_way_preview, update_two_way_release,
@@ -45,6 +49,7 @@ pub fn run() {
             app_get_info,
             select_installed_root,
             select_package_file,
+            select_packages_folder,
             session_list_selections,
             session_release_selection,
             scan_installed_root,
@@ -62,6 +67,10 @@ pub fn run() {
             update_two_way_get_diff,
             update_two_way_apply,
             update_two_way_release,
+            update_batch_plan,
+            update_batch_apply,
+            update_batch_open_package,
+            update_batch_release,
             update_history_list,
             update_history_undo,
             storage_report,

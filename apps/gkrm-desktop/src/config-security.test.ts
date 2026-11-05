@@ -11,11 +11,12 @@ const root = process.cwd()
  * Pinned rather than derived: the point of the number is that widening the surface an untrusted
  * page can reach has to be something somebody typed, not something a list grew into.
  */
-const EXPECTED_COMMAND_COUNT = 24
+const EXPECTED_COMMAND_COUNT = 29
 const expectedPermissions = [
   'allow-app-get-info',
   'allow-select-installed-root',
   'allow-select-package-file',
+  'allow-select-packages-folder',
   'allow-session-list-selections',
   'allow-session-release-selection',
   'allow-scan-installed-root',
@@ -33,6 +34,10 @@ const expectedPermissions = [
   'allow-update-two-way-get-diff',
   'allow-update-two-way-apply',
   'allow-update-two-way-release',
+  'allow-update-batch-plan',
+  'allow-update-batch-apply',
+  'allow-update-batch-open-package',
+  'allow-update-batch-release',
   'allow-update-history-list',
   'allow-update-history-undo',
   'allow-storage-report',
@@ -42,6 +47,7 @@ const expectedCommands = [
   'app_get_info',
   'select_installed_root',
   'select_package_file',
+  'select_packages_folder',
   'session_list_selections',
   'session_release_selection',
   'scan_installed_root',
@@ -59,6 +65,10 @@ const expectedCommands = [
   'update_two_way_get_diff',
   'update_two_way_apply',
   'update_two_way_release',
+  'update_batch_plan',
+  'update_batch_apply',
+  'update_batch_open_package',
+  'update_batch_release',
   'update_history_list',
   'update_history_undo',
   'storage_report',

@@ -225,6 +225,12 @@
           "markdownDescription": "Enables the select_package_file command without any pre-configured scope."
         },
         {
+          "description": "Enables the select_packages_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-select-packages-folder",
+          "markdownDescription": "Enables the select_packages_folder command without any pre-configured scope."
+        },
+        {
           "description": "Enables the session_list_selections command without any pre-configured scope.",
           "type": "string",
           "const": "allow-session-list-selections",
@@ -247,6 +253,30 @@
           "type": "string",
           "const": "allow-storage-report",
           "markdownDescription": "Enables the storage_report command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_batch_apply command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-batch-apply",
+          "markdownDescription": "Enables the update_batch_apply command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_batch_open_package command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-batch-open-package",
+          "markdownDescription": "Enables the update_batch_open_package command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_batch_plan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-batch-plan",
+          "markdownDescription": "Enables the update_batch_plan command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_batch_release command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-batch-release",
+          "markdownDescription": "Enables the update_batch_release command without any pre-configured scope."
         },
         {
           "description": "Enables the update_history_list command without any pre-configured scope.",
@@ -369,6 +399,12 @@
           "markdownDescription": "Denies the select_package_file command without any pre-configured scope."
         },
         {
+          "description": "Denies the select_packages_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-select-packages-folder",
+          "markdownDescription": "Denies the select_packages_folder command without any pre-configured scope."
+        },
+        {
           "description": "Denies the session_list_selections command without any pre-configured scope.",
           "type": "string",
           "const": "deny-session-list-selections",
@@ -391,6 +427,30 @@
           "type": "string",
           "const": "deny-storage-report",
           "markdownDescription": "Denies the storage_report command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_batch_apply command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-batch-apply",
+          "markdownDescription": "Denies the update_batch_apply command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_batch_open_package command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-batch-open-package",
+          "markdownDescription": "Denies the update_batch_open_package command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_batch_plan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-batch-plan",
+          "markdownDescription": "Denies the update_batch_plan command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_batch_release command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-batch-release",
+          "markdownDescription": "Denies the update_batch_release command without any pre-configured scope."
         },
         {
           "description": "Denies the update_history_list command without any pre-configured scope.",

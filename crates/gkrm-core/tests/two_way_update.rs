@@ -404,12 +404,15 @@ fn the_package_an_update_applied_is_kept_for_the_next_one() {
     .expect("preview");
 
     // The installation now holds the operator's merge of the file, which is not what the package
-    // ships — so it is theirs to answer, and nothing else is.
-    assert_eq!(preview.plan().summary().review(), 1);
+    // ships. But the package is also what the installation was installed from, so the developer
+    // has changed nothing since: the difference is the operator's own edit, and there is no other
+    // side to ask them about. Asking again after every update, for a file the developer never
+    // touched, is a question with no answer to give.
+    assert_eq!(preview.plan().summary().review(), 0);
     assert_eq!(preview.plan().summary().take_from_update(), 0);
     assert_eq!(
         action_for(&preview, "settings.lua"),
-        TwoWayFileAction::Review
+        TwoWayFileAction::KeepYours
     );
 }
 
@@ -1974,6 +1977,20 @@ fn the_versions_on_both_sides_are_read_from_the_manifests() {
     let preview = preview();
     assert_eq!(preview.installed_version(), Some("1.0.0"));
     assert_eq!(preview.incoming_version(), Some("2.0.0"));
+}
+
+#[test]
+fn what_the_manifests_differ_in_is_reported_before_anything_is_decided() {
+    let preview = preview();
+    let changes = preview.manifest_changes().expect("both manifests read");
+    assert_eq!(changes.client_scripts.added, ["client/new_feature.lua"]);
+    assert!(changes.client_scripts.removed.is_empty());
+    assert!(changes.server_scripts.is_empty());
+    assert!(changes.dependencies.is_empty());
+    let version = changes.version.as_ref().expect("version changed");
+    assert_eq!(version.installed.as_deref(), Some("1.0.0"));
+    assert_eq!(version.incoming.as_deref(), Some("2.0.0"));
+    assert!(changes.fx_version.is_none());
 }
 
 #[test]

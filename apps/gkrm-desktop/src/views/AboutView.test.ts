@@ -28,6 +28,7 @@ describe('AboutView', () => {
     expect(wrapper.findAll('dl.metadata-list')).toHaveLength(1)
     expect(wrapper.find('.build-details').attributes('open')).toBeUndefined()
     expect(wrapper.find('a[href="#/"]').text()).toBe('Update a resource')
+    expect(wrapper.find('a[href="#/batch"]').text()).toBe('Update several at once')
     expect(wrapper.find('a[href="#/history"]').text()).toBe('View history')
     expect(wrapper.text()).not.toMatch(/C:\\|123e4567|sha256|capabilit/i)
   })

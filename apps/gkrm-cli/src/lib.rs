@@ -167,6 +167,8 @@ struct PlanResourcePresentation {
     match_kind: &'static str,
     counts: PlanResourceCounts,
     files: Vec<PlanFilePresentation>,
+    /// `None` when a manifest could not be read, which is not the same as "nothing changed".
+    manifest_changes: Option<ManifestChangesDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,6 +269,34 @@ struct PlanResourceDto {
     match_kind: &'static str,
     counts: PlanResourceCountsDto,
     files: Vec<PlanFileDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manifest_changes: Option<ManifestChangesDto>,
+}
+
+/// What the incoming manifest declares differently from the installed one. Only lists that
+/// changed are present.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ManifestChangesDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fx_version: Option<ManifestValueChangeDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<ManifestValueChangeDto>,
+    lists: Vec<ManifestListChangeDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ManifestValueChangeDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    installed: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    incoming: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ManifestListChangeDto {
+    declaration: &'static str,
+    added: Vec<String>,
+    removed: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -671,6 +701,10 @@ fn render_plan_text(report: &FullInspectionReport, plan: &BaselineFreeUpdatePlan
             output.push_str(&format!("    [{}] {}\n", file.disposition, file.path));
             output.push_str(&format!("      {}\n", file.reason));
         }
+
+        if let Some(changes) = &resource.manifest_changes {
+            render_manifest_changes_text(&mut output, changes);
+        }
     }
 
     if !presentation.unmatched_installed_resources.is_empty() {
@@ -688,6 +722,48 @@ fn render_plan_text(report: &FullInspectionReport, plan: &BaselineFreeUpdatePlan
     }
 
     output
+}
+
+fn render_manifest_changes_text(output: &mut String, changes: &ManifestChangesDto) {
+    if changes.fx_version.is_none() && changes.version.is_none() && changes.lists.is_empty() {
+        return;
+    }
+    output.push_str(
+        "    Manifest changes
+",
+    );
+    for (name, change) in [
+        ("fx_version", &changes.fx_version),
+        ("version", &changes.version),
+    ] {
+        if let Some(change) = change {
+            output.push_str(&format!(
+                "      {name}: {} -> {}
+",
+                change.installed.as_deref().unwrap_or("(not declared)"),
+                change.incoming.as_deref().unwrap_or("(not declared)")
+            ));
+        }
+    }
+    for list in &changes.lists {
+        output.push_str(&format!(
+            "      {}
+",
+            list.declaration
+        ));
+        for entry in &list.added {
+            output.push_str(&format!(
+                "        + {entry}
+"
+            ));
+        }
+        for entry in &list.removed {
+            output.push_str(&format!(
+                "        - {entry}
+"
+            ));
+        }
+    }
 }
 
 fn build_presentation(report: &FullInspectionReport) -> InspectionPresentation {
@@ -723,10 +799,17 @@ fn build_plan_presentation(
 ) -> PlanPresentation {
     let installed_labels = installed_labels(report);
     let incoming_labels = incoming_labels(report);
+    let manifest_changes = gkrm_core::plan_manifest_changes(report, plan);
     let resources = plan
         .resources()
         .iter()
-        .map(|resource| plan_resource_presentation(resource, &installed_labels, &incoming_labels))
+        .zip(manifest_changes)
+        .map(|(resource, manifest)| {
+            let mut presentation =
+                plan_resource_presentation(resource, &installed_labels, &incoming_labels);
+            presentation.manifest_changes = manifest.changes.as_ref().map(manifest_changes_dto);
+            presentation
+        })
         .collect::<Vec<_>>();
     let counts = plan_counts_dto(plan);
     let warnings = plan
@@ -776,6 +859,38 @@ fn plan_resource_presentation(
         match_kind: match_kind_label(resource.resource_match().match_kind),
         counts,
         files,
+        manifest_changes: None,
+    }
+}
+
+fn manifest_changes_dto(changes: &gkrm_core::ManifestChanges) -> ManifestChangesDto {
+    let value = |change: &Option<gkrm_core::ValueChange>| {
+        change.as_ref().map(|change| ManifestValueChangeDto {
+            installed: change.installed.clone(),
+            incoming: change.incoming.clone(),
+        })
+    };
+    let lists = [
+        ("dependencies", &changes.dependencies),
+        ("client_scripts", &changes.client_scripts),
+        ("server_scripts", &changes.server_scripts),
+        ("shared_scripts", &changes.shared_scripts),
+        ("files", &changes.files),
+        ("ui_pages", &changes.ui_pages),
+        ("escrow_ignore", &changes.escrow_ignore),
+    ]
+    .into_iter()
+    .filter(|(_, change)| !change.is_empty())
+    .map(|(declaration, change)| ManifestListChangeDto {
+        declaration,
+        added: change.added.clone(),
+        removed: change.removed.clone(),
+    })
+    .collect();
+    ManifestChangesDto {
+        fx_version: value(&changes.fx_version),
+        version: value(&changes.version),
+        lists,
     }
 }
 
@@ -1226,6 +1341,7 @@ impl PlanResourceDto {
                 .into_iter()
                 .map(PlanFileDto::from_presentation)
                 .collect(),
+            manifest_changes: resource.manifest_changes,
         }
     }
 }

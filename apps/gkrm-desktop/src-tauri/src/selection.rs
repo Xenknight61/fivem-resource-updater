@@ -411,6 +411,11 @@ pub fn validate_selection_shape(
                 return Err(DesktopFailure::InvalidPackageFile);
             }
         }
+        SelectionKind::PackagesFolder => {
+            if !file_type.is_dir() {
+                return Err(DesktopFailure::InvalidRequest);
+            }
+        }
     }
     Ok(SelectionValidation {
         is_dir: file_type.is_dir(),
@@ -427,6 +432,7 @@ fn stale_or_invalid(kind: SelectionKind) -> DesktopFailure {
     match kind {
         SelectionKind::InstalledRoot => DesktopFailure::InvalidInstalledRoot,
         SelectionKind::PackageFile => DesktopFailure::InvalidPackageFile,
+        SelectionKind::PackagesFolder => DesktopFailure::InvalidRequest,
     }
 }
 
@@ -442,7 +448,10 @@ fn unique_display_label<'a>(
     existing: impl Iterator<Item = &'a SelectionRecord>,
 ) -> String {
     let base = display_label_base(kind, path);
+    // Only a different folder or file with the same name needs telling apart. Choosing the same
+    // one again should read as itself, not as "resources (3)".
     let active: BTreeSet<_> = existing
+        .filter(|record| record.path != path)
         .map(|record| record.display_label.as_str())
         .collect();
     if !active.contains(base.as_str()) {
@@ -457,6 +466,7 @@ fn unique_display_label<'a>(
     truncate_label(match kind {
         SelectionKind::InstalledRoot => "Installed root",
         SelectionKind::PackageFile => "Package file",
+        SelectionKind::PackagesFolder => "Packages folder",
     })
 }
 
@@ -464,6 +474,7 @@ fn display_label_base(kind: SelectionKind, path: &Path) -> String {
     let fallback = match kind {
         SelectionKind::InstalledRoot => "Installed root",
         SelectionKind::PackageFile => "Package file",
+        SelectionKind::PackagesFolder => "Packages folder",
     };
     let raw = path
         .file_name()
@@ -857,6 +868,23 @@ mod tests {
             .map(|s| s.display_label)
             .collect();
         assert!(labels.iter().any(|label| label.ends_with("(2)")));
+    }
+
+    #[test]
+    fn choosing_the_same_folder_again_keeps_its_plain_name() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("resources");
+        fs::create_dir_all(&path).unwrap();
+        let mut registry = SelectionRegistry::default();
+        let handles = [uuid(1), uuid(2), uuid(3)];
+        let mut generator = FakeGenerator::new(&[&handles[0], &handles[1], &handles[2]]);
+        for _ in 0..3 {
+            let summary = registry
+                .insert(SelectionKind::InstalledRoot, path.clone(), &mut generator)
+                .unwrap();
+            // Not "resources (2)": nothing else here has that name.
+            assert_eq!(summary.display_label, "resources");
+        }
     }
 
     #[test]

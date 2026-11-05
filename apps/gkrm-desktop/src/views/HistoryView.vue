@@ -743,12 +743,19 @@ function keptFor(held: HeldBaseline): string {
   color: var(--success);
 }
 
+/* The panes take the height that is left, and the list and the detail each scroll inside it, so
+   there is one thing to scroll at a time. A window too short for that falls back to scrolling the
+   page rather than squeezing the panes below a usable height. */
 .panes {
   display: grid;
   grid-template-columns: minmax(260px, 28%) minmax(0, 1fr);
-  flex: 1 0 auto;
+  flex: 1 1 0;
   min-height: 300px;
   min-width: 0;
+}
+
+.panes > * {
+  min-height: 0;
 }
 
 .past {
@@ -816,7 +823,6 @@ function keptFor(held: HeldBaseline): string {
   align-content: start;
   flex: 1;
   min-height: 0;
-  max-height: 60vh;
   overflow-y: auto;
   padding: var(--space-8);
   margin: 0;
@@ -868,6 +874,7 @@ function keptFor(held: HeldBaseline): string {
   align-items: stretch;
   gap: var(--space-24);
   min-width: 0;
+  overflow-y: auto;
   padding: var(--space-24) var(--space-32);
 }
 

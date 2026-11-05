@@ -49,9 +49,10 @@ const principleGroups = [
 <template>
   <section class="about-view" aria-labelledby="about-heading">
     <PageHeader class="about-header" heading-id="about-heading" title="FiveM Resource Updater" eyebrow="About" description="Update your resources. Keep the work you put into them." document>
-      <p class="intro">Compare your installation with a new package, review the changes, and apply the update with a backup of every file it replaces.</p>
+      <p class="intro">Compare your installation with a new package, review the changes, and apply the update with a backup of every file it replaces. Have a folder of packages? Update everything that needs no answer in one go.</p>
       <div class="about-actions">
         <a class="button-link" href="#/">Update a resource</a>
+        <a class="button-link" href="#/batch">Update several at once</a>
         <a class="text-link" href="#/history">View history</a>
       </div>
     </PageHeader>

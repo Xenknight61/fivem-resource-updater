@@ -10,6 +10,8 @@ pub const MAX_PLAN_DECISION_SUBMISSIONS: usize = 365;
 pub enum SelectionKind {
     InstalledRoot,
     PackageFile,
+    /// A folder of update packages, for updating several resources at once.
+    PackagesFolder,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1037,6 +1039,38 @@ pub struct TwoWaySummary {
     pub total: u32,
 }
 
+/// One manifest list that gained or lost entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestChangeGroup {
+    /// Which declaration: `dependencies`, `client_scripts`, `server_scripts`, `shared_scripts`,
+    /// `files`, `ui_pages` or `escrow_ignore`.
+    pub kind: &'static str,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
+
+/// `fx_version` going from one value to another. A side that declares none is absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestFxVersionChange {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incoming: Option<String>,
+}
+
+/// What the two manifests differ in, bounded for the screen. Only groups that changed are sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestChangesDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fx_version: Option<ManifestFxVersionChange>,
+    pub groups: Vec<ManifestChangeGroup>,
+    /// Entries beyond the per-list cap, so a long list is not mistaken for a complete one.
+    pub omitted_count: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TwoWayPreviewResponse {
@@ -1048,6 +1082,10 @@ pub struct TwoWayPreviewResponse {
     pub installed_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub incoming_version: Option<String>,
+    /// What the manifests differ in. Absent when either could not be read, which is not the same
+    /// as "nothing changed".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_changes: Option<ManifestChangesDto>,
     pub summary: TwoWaySummary,
     pub files: Vec<TwoWayFile>,
     /// Files beyond the listing cap. The update still applies to them.
@@ -1722,4 +1760,128 @@ mod task29_fixture_tests {
             assert!(serde_json::from_value::<UpdatePlanSubmitDecisionsRequest>(invalid).is_err());
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Batch update: a folder of packages against one installation.
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BatchPlanRequest {
+    #[serde(deserialize_with = "deserialize_opaque_handle")]
+    pub installed_selection_handle: String,
+    #[serde(deserialize_with = "deserialize_opaque_handle")]
+    pub packages_selection_handle: String,
+}
+
+/// What the batch found out about one package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchEntryKind {
+    Ready,
+    UpToDate,
+    NeedsReview,
+    NoInstalledResource,
+    DuplicatePackage,
+    NotASingleResource,
+    BlockedByEarlierUpdate,
+    Unreadable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchEntryDto {
+    /// Position in the plan. The frontend names an entry by this and nothing else.
+    pub id: u32,
+    /// The package's file name. Never a path.
+    pub package_name: String,
+    /// The resource the package carries, when it could be told.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    pub kind: BatchEntryKind,
+    /// Files that differ on both sides.
+    pub review: u32,
+    /// Editable files that differ but cannot be compared line by line.
+    pub unmergeable: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incoming_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<TwoWaySummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_changes: Option<ManifestChangesDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchPlanResponse {
+    pub handle: String,
+    pub entries: Vec<BatchEntryDto>,
+    /// How many entries applying would write.
+    pub ready_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BatchApplyRequest {
+    #[serde(deserialize_with = "deserialize_opaque_handle")]
+    pub handle: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchApplyResultKind {
+    Committed,
+    Skipped,
+    Failed,
+    NotAttempted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchEntryResultDto {
+    pub id: u32,
+    pub result: BatchApplyResultKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchApplyResponse {
+    pub results: Vec<BatchEntryResultDto>,
+    pub committed_count: u32,
+}
+
+/// Hand one package of a batch to the single-resource update, as an ordinary package selection.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BatchOpenPackageRequest {
+    #[serde(deserialize_with = "deserialize_opaque_handle")]
+    pub handle: String,
+    pub id: u32,
+}
+
+/// The two selections the Update screen needs to review one package of a batch.
+///
+/// Both are new, so the Update screen owns them outright and can release them when it is done,
+/// without ever letting go of a selection the batch screen is still using.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchOpenPackageResponse {
+    pub package: SelectionSummary,
+    pub installed: SelectionSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BatchReleaseRequest {
+    #[serde(deserialize_with = "deserialize_opaque_handle")]
+    pub handle: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchReleaseResponse {
+    pub released: bool,
 }

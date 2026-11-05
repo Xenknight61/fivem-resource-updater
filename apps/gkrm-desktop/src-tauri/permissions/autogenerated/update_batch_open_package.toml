@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-update-batch-open-package"
+description = "Enables the update_batch_open_package command without any pre-configured scope."
+commands.allow = ["update_batch_open_package"]
+
+[[permission]]
+identifier = "deny-update-batch-open-package"
+description = "Denies the update_batch_open_package command without any pre-configured scope."
+commands.deny = ["update_batch_open_package"]

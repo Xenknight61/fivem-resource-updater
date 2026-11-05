@@ -7,7 +7,12 @@ import PageHeader from '@/components/PageHeader.vue'
 import StatusNotice from '@/components/StatusNotice.vue'
 import { useRecoveryStore } from '@/stores/recovery'
 import { useUpdateStore } from '@/stores/update'
-import type { TwoWayDiffRow, TwoWayFile, TwoWayFileDisposition } from '@/types/commands'
+import { presentManifestChanges } from '@/views/manifestPresentation'
+import type {
+  TwoWayDiffRow,
+  TwoWayFile,
+  TwoWayFileDisposition,
+} from '@/types/commands'
 
 const update = useUpdateStore()
 const recovery = useRecoveryStore()
@@ -65,6 +70,62 @@ async function navigateFiles(event: KeyboardEvent) {
   const path = target.dataset.path
   if (path !== undefined) await update.openFile(path)
 }
+/**
+ * Leaving a finished update for the next one.
+ *
+ * A finished update stays on record until it is closed, and nothing else can be written meanwhile.
+ * The operator is on their way to another resource, so this is the moment to ask — not after they
+ * have chosen it and found the button closed.
+ */
+const leaving = ref(false)
+const leavePrompt = ref<HTMLElement>()
+let leaveReturnFocus: HTMLElement | undefined
+const resourceName = computed(() => update.preview?.resource ?? 'This resource')
+
+function requestChangeSources() {
+  if (update.blockedByEarlierUpdate && update.blocked === 'finishable') {
+    leaveReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+    leaving.value = true
+    void nextTick(() => leavePrompt.value?.querySelector<HTMLButtonElement>('button')?.focus())
+    return
+  }
+  void update.changeSources()
+}
+
+function dismissLeave() {
+  leaving.value = false
+  leaveReturnFocus?.focus()
+  leaveReturnFocus = undefined
+}
+
+async function leaveAndKeepOpen() {
+  leaving.value = false
+  await update.changeSources()
+}
+
+async function leaveAndClose() {
+  leaving.value = false
+  await update.closePreviousUpdateAndChangeSources()
+}
+
+function leaveKey(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    dismissLeave()
+  } else if (event.key === 'Tab') {
+    const buttons = leavePrompt.value?.querySelectorAll<HTMLButtonElement>('button')
+    const first = buttons?.[0]
+    const last = buttons?.[buttons.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last?.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first?.focus()
+    }
+  }
+}
+
 const confirmation = ref<HTMLElement>()
 let returnFocus: HTMLElement | undefined
 watch(() => update.confirming, async (open) => {
@@ -142,7 +203,7 @@ const outcomeMessage = computed(() => {
     case 'already_up_to_date':
       return 'Nothing to do — your installation already matches this package.'
     case 'committed':
-      return 'Updated. The list below is what was applied, not what is still pending.'
+      return 'Updated. The list shows what was applied.'
     case 'rolled_back':
       return 'Nothing was changed. The update was rolled back and your files are as they were.'
     default:
@@ -342,6 +403,14 @@ const sameVersion = computed(() => {
   return from !== undefined && to !== undefined && from === to ? from : undefined
 })
 
+/**
+ * What the update's manifest declares differently, so a new dependency or script is seen before
+ * it is applied. Nothing here is acted on: the manifest is only read.
+ */
+const manifestChanges = computed(() => presentManifestChanges(update.preview?.manifestChanges))
+
+const manifestChangesLabel = computed(() => manifestChanges.value?.label ?? '')
+
 const applyLabel = computed(() => (update.loading.apply ? 'Updating…' : 'Apply update'))
 
 const summaryLine = computed(() => {
@@ -391,7 +460,12 @@ const summaryLine = computed(() => {
 <template>
   <section class="update" :class="{ 'is-setup': !update.preview }" aria-labelledby="update-heading">
     <PageHeader v-if="!update.preview" class="setup-header" heading-id="update-heading" title="Update a resource" description="Choose your installation and new package to review what changes.">
-      <template #actions><a class="button-link" href="#/history">View history</a></template>
+      <template #actions>
+        <span class="header-actions">
+          <a class="button-link" href="#/batch">Update several at once</a>
+          <a class="button-link" href="#/history">View history</a>
+        </span>
+      </template>
     </PageHeader>
     <h1 v-else id="update-heading" class="sr-only">Update a resource</h1>
 
@@ -402,7 +476,7 @@ const summaryLine = computed(() => {
         <span v-if="versionMove" class="versions">{{ versionMove }}</span>
         <p class="muted">{{ update.folder?.displayLabel }} · {{ update.package?.displayLabel }}</p>
       </div>
-      <button type="button" :disabled="!update.canChooseSources" @click="update.changeSources()">Change sources</button>
+      <button type="button" :disabled="!update.canChooseSources" @click="requestChangeSources()">Change sources</button>
     </header>
     <div v-else class="sources setup-sources">
       <button
@@ -414,7 +488,7 @@ const summaryLine = computed(() => {
       >
         <span class="source-copy">
           <span class="step">1. Installed resource</span>
-          <span class="source-hint">The resource folder you use on your server.</span>
+          <span class="source-hint">The folder with your resources, or one resource inside it.</span>
         </span>
         <span class="value">{{ update.folder?.displayLabel ?? 'Choose folder…' }}</span>
       </button>
@@ -454,6 +528,20 @@ const summaryLine = computed(() => {
 
     <StatusNotice v-if="update.loading.compare && update.preview">Comparing sources… Your installation stays unchanged.</StatusNotice>
 
+    <Disclosure v-if="manifestChanges" class="manifest-changes" :label="manifestChangesLabel">
+      <p v-if="manifestChanges.fx" class="muted">fx_version: {{ manifestChanges.fx }}</p>
+      <div v-for="group in manifestChanges.groups" :key="group.kind" class="manifest-group">
+        <strong>{{ group.label }}</strong>
+        <ul>
+          <li v-for="entry in group.added" :key="`+${entry}`"><span class="sr-only">Added </span>+ {{ entry }}</li>
+          <li v-for="entry in group.removed" :key="`-${entry}`"><span class="sr-only">Removed </span>− {{ entry }}</li>
+        </ul>
+      </div>
+      <p v-if="manifestChanges.omittedCount > 0" class="muted">
+        {{ manifestChanges.omittedCount }} more entries are not listed.
+      </p>
+    </Disclosure>
+
     <details v-if="baselineInPlay" class="source-details">
       <summary>Original package · {{ update.baseline?.displayLabel }}</summary>
       <p class="banner baseline">
@@ -490,7 +578,11 @@ const summaryLine = computed(() => {
     </StatusNotice>
 
     <div v-if="update.blocked === 'finishable'" class="banner blocked" role="status">
-      <span>
+      <span v-if="update.outcome === 'committed'">
+        This update is finished but still open. Close it when you are ready to update another
+        resource — its backups and history are kept either way.
+      </span>
+      <span v-else>
         Your previous update is still on record. Close it to start another one — its backups and
         history are kept either way.
       </span>
@@ -682,6 +774,11 @@ const summaryLine = computed(() => {
         This package declares version {{ sameVersion }}, the one already installed. If you meant
         to move to a newer version, check which file you chose.
       </p>
+      <p v-if="update.blockedByEarlierUpdate && !applied" class="caution" role="status">
+        {{ update.blocked === 'finishable'
+          ? 'Close the previous update above before applying this one.'
+          : 'An earlier update needs attention before anything new can be applied.' }}
+      </p>
       <p class="summary">{{ summaryLine }}</p>
       <p v-if="!applied && update.pendingWholeFiles.length > 0" class="choice-required">Choose an outcome for {{ update.pendingWholeFiles.length }} {{ update.pendingWholeFiles.length === 1 ? 'file' : 'files' }} to continue.</p>
       <template #actions>
@@ -705,6 +802,33 @@ const summaryLine = computed(() => {
       </template>
       </template>
     </ActionBar>
+
+    <!-- On the way to another resource: offer to close the update that just finished. -->
+    <div
+      v-if="leaving"
+      ref="leavePrompt"
+      class="confirm-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="leave-heading"
+      @keydown="leaveKey"
+    >
+      <article class="confirm">
+        <h2 id="leave-heading">Close this update before you go on?</h2>
+        <p>
+          {{ resourceName }} is finished but still open. Close it to update another resource —
+          until you do, nothing else can be written.
+        </p>
+        <p class="muted">
+          Its backups stay, and History → Undo can still put it back.
+        </p>
+        <div class="confirm-actions">
+          <button type="button" @click="dismissLeave()">Stay here</button>
+          <button type="button" @click="leaveAndKeepOpen()">Keep it open</button>
+          <button type="button" class="primary" @click="leaveAndClose()">Close it and continue</button>
+        </div>
+      </article>
+    </div>
 
     <!-- Review the complete outcome and name editable files being replaced before any write. -->
     <div
@@ -735,7 +859,7 @@ const summaryLine = computed(() => {
           Every file is backed up first, and History → Undo puts this update back byte for byte.
         </p>
         <div class="confirm-actions">
-          <button type="button" @click="update.cancelApply()">Back to the list</button>
+          <button type="button" @click="update.cancelApply()">Back — nothing is written</button>
           <button type="button" class="primary" @click="update.apply()">{{ applyLabel }}</button>
         </div>
       </article>
@@ -787,6 +911,11 @@ const summaryLine = computed(() => {
 .setup-header .button-link {
   flex: none;
   font-size: 0.84rem;
+}
+
+.header-actions {
+  display: flex;
+  gap: var(--space-8);
 }
 
 .source-copy {
@@ -933,6 +1062,14 @@ summary {
 summary:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
+}
+
+.manifest-group ul {
+  margin: var(--space-4, 4px) 0 var(--space-12);
+  padding-left: var(--space-16);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-caption);
+  list-style: none;
 }
 
 .source-details > summary {
