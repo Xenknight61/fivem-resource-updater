@@ -205,10 +205,11 @@ describe('the batch screen', () => {
       { id: 3, result: 'skipped' },
       { id: 4, result: 'skipped' },
     ]
-    const { wrapper } = await compared()
-    await useBatchStore().apply()
+    const { wrapper, store } = await compared()
+    await vi.waitFor(() => expect(store.canApply).toBe(true))
+    await store.apply()
     await flushPromises()
-    expect(wrapper.text()).toContain('The batch stopped at beta')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('The batch stopped at beta'))
     expect(wrapper.text()).toContain('1 resource was updated before it')
     const badges = wrapper.findAll('.status-badge').map((badge) => badge.text())
     expect(badges.some((text) => text.includes('Updated'))).toBe(true)
@@ -220,6 +221,7 @@ describe('the batch screen', () => {
     // What is left to do once the batch has run is exactly the packages it left for the operator,
     // so the way to them cannot go away with the button that ran the batch.
     const { wrapper, store } = await compared()
+    await vi.waitFor(() => expect(store.canApply).toBe(true))
     await store.apply()
     await flushPromises()
     expect(store.results).toBeDefined()
@@ -231,6 +233,7 @@ describe('the batch screen', () => {
     const { wrapper, store } = await compared()
     // The batch leaves its updates on record until the operator closes them.
     overview = { ...clear, disposition: 'attention_required', terminalEvidence: true }
+    await vi.waitFor(() => expect(store.canApply).toBe(true))
     await store.apply()
     await flushPromises()
     expect(store.blocked).toBe('finishable')
@@ -277,6 +280,7 @@ describe('the batch screen', () => {
     overview = { ...clear, disposition: 'attention_required', terminalEvidence: true }
     const { useRecoveryStore } = await import('@/stores/recovery')
     useRecoveryStore().overviewPhase = 'unknown'
+    await vi.waitFor(() => expect(store.canApply).toBe(true))
     await store.apply()
     await flushPromises()
 
