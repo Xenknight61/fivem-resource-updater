@@ -2,7 +2,7 @@
   "name": "gkrm-desktop",
   "private": true,
   "license": "MIT",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "type": "module",
   "engines": {
     "node": ">=22.18.0 <23",
